@@ -65,8 +65,9 @@ class RemoteAgentApp:
     def __init__(self, root, startup_config=None):
         self.root = root
         self.root.title("netrem - Remote Control")
-        self.root.geometry("420x520")
-        self.root.resizable(False, False)
+        self.root.geometry("440x760")
+        self.root.minsize(440, 680)
+        self.root.resizable(True, True)
 
         self.sio = None
         self.connecting = False

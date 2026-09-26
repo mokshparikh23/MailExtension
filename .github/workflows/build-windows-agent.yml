@@ -1,0 +1,35 @@
+name: Build Windows netrem
+
+'on':
+  push:
+    branches: [main]
+    paths:
+      - agent/**
+      - .github/workflows/build-windows-agent.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r agent/requirements.txt
+      - name: Build visible Windows agent
+        working-directory: agent
+        run: python -m PyInstaller --onefile --windowed --name netrem agent_gui.py
+      - name: Upload netrem.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrem-windows
+          path: agent/dist/netrem.exe
+          if-no-files-found: error
+          retention-days: 30

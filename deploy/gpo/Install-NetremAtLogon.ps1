@@ -27,7 +27,17 @@ try {
     }
     if ($monitor -lt 1 -or $monitor -gt 32) { throw "monitor must be between 1 and 32." }
 
-    $room = "$roomPrefix-$env:COMPUTERNAME".ToLowerInvariant()
+    # MachineGuid keeps the room unique across sites/domains with repeated hostnames.
+    $machineGuid = [string](Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid).MachineGuid
+    if (-not $machineGuid) { throw "Windows MachineGuid is unavailable." }
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $guidBytes = [Text.Encoding]::UTF8.GetBytes($machineGuid.ToLowerInvariant())
+        $deviceId = [BitConverter]::ToString($sha256.ComputeHash($guidBytes)).Replace("-", "").Substring(0, 12).ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+    $room = "$roomPrefix-$env:COMPUTERNAME-$deviceId".ToLowerInvariant()
     $version = (Get-FileHash $sourceExe -Algorithm SHA256).Hash.Substring(0, 12)
     $versionDir = Join-Path $localRoot "versions\$version"
     $installedExe = Join-Path $versionDir "netrem.exe"

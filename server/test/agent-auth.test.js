@@ -2,6 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 async function freePort() {
   const listener = net.createServer();
@@ -33,12 +36,21 @@ async function emit(socket, event, data) {
 test('agent token can register devices but cannot enumerate or join controller role', { timeout: 10000 }, async (t) => {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netrem-test-'));
   const server = spawn(process.execPath, ['src/server.js'], {
     cwd: `${__dirname}/..`,
-    env: { ...process.env, PORT: String(port), ACCESS_TOKEN: 'controller-secret', AGENT_TOKEN: 'agent-secret' },
+    env: {
+      ...process.env, PORT: String(port), ACCESS_TOKEN: 'controller-secret', AGENT_TOKEN: 'agent-secret',
+      DEVICE_REGISTRY_PATH: path.join(tempDir, 'devices.json')
+    },
     stdio: 'ignore'
   });
-  t.after(() => server.kill());
+  t.after(async () => {
+    if (server.exitCode === null) {
+      await new Promise((resolve) => { server.once('exit', resolve); server.kill(); });
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 
   let ready = false;
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -71,4 +83,23 @@ test('agent token can register devices but cannot enumerate or join controller r
     headers: { Authorization: 'Bearer controller-secret' }
   });
   assert.deepEqual((await afterSpoof.json()).agents.map((item) => item.roomId), ['lab-pc01']);
+
+  const secondAgent = await connectSocket(base, 'agent-secret');
+  await emit(secondAgent, 'agent:join', { roomId: 'lab-pc02', device: { host: 'PC02' } });
+  const pageOne = await fetch(`${base}/api/agents?limit=1&offset=0`, {
+    headers: { Authorization: 'Bearer controller-secret' }
+  });
+  const firstPage = await pageOne.json();
+  assert.equal(firstPage.total, 2);
+  assert.equal(firstPage.agents.length, 1);
+  const pageTwo = await fetch(`${base}/api/agents?limit=1&offset=1`, {
+    headers: { Authorization: 'Bearer controller-secret' }
+  });
+  const secondPage = await pageTwo.json();
+  assert.equal(secondPage.agents.length, 1);
+  assert.notEqual(firstPage.agents[0].roomId, secondPage.agents[0].roomId);
+  const search = await fetch(`${base}/api/agents?q=pc02`, {
+    headers: { Authorization: 'Bearer controller-secret' }
+  });
+  assert.deepEqual((await search.json()).agents.map((item) => item.roomId), ['lab-pc02']);
 });

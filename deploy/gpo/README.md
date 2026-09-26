@@ -1,8 +1,10 @@
 # Deploy the visible Windows agent with Group Policy
 
-This lab package installs the agent at user sign-in. No one has to run CMD or
-PowerShell on each laptop. The agent remains visible and can be disconnected or
-closed locally. Windows sign-in is required for desktop capture.
+This lab package installs the agent at user sign-in. It has no configured laptop
+count: any future domain-joined laptop in the targeted OU/group receives the
+same policy. No one has to run CMD or PowerShell on each laptop. The agent
+remains visible and can be disconnected or closed locally. Windows sign-in is
+required for desktop capture.
 
 ## 1. Update the central relay
 
@@ -21,7 +23,10 @@ they are in `deploy/.env` and the service is `relay`.
 
 After the update, `https://remote.averisglobalsolution.com/health` should return
 `{"ok":true,...}`. The controller's **Refresh devices** button uses
-`/api/agents`; its list is available only with `ACCESS_TOKEN`.
+`/api/agents`; its list is available only with `ACCESS_TOKEN`. Search by device
+name or room when the list grows. Device names and last-seen times survive
+relay restarts in `server/data/devices.json` (native) or the Compose
+`device_registry` volume. Back up that file/volume during server migrations.
 
 ## 2. Build the Windows executable once
 
@@ -43,7 +48,10 @@ that folder:
 
 In `deployment.json`, keep the central HTTPS URL, set `agentToken` to the
 server's **AGENT_TOKEN**, and choose a `roomPrefix` such as `lab`. Each laptop
-then gets a room such as `lab-DESKTOP-9M7FTGI`. Do not put `ACCESS_TOKEN` in this
+then gets a stable room such as `lab-DESKTOP-9M7FTGI-a1b2c3d4e5f6`. The final
+part is derived from that Windows installation's MachineGuid, so repeated
+computer names across sites do not collide. Properly generalize cloned Windows
+images so they do not share a MachineGuid. Do not put `ACCESS_TOKEN` in this
 file. Do not commit `deployment.json` to Git.
 
 Add `Install-NetremAtLogon.ps1` as a PowerShell logon script. Scope the GPO to
@@ -65,9 +73,18 @@ controller website, enter the admin `ACCESS_TOKEN`, click **Refresh devices**,
 select that laptop, and click **Connect**. If installation fails, read
 `%LOCALAPPDATA%\AverisNetrem\gpo-install-error.log` on the laptop.
 
-After the pilot works, apply the GPO to a small group, then the full 50-device
-group. Remove the GPO assignment to stop launching new agents at sign-in;
-existing agents stop when their user signs out or closes the window.
+After the pilot works, apply the GPO to a small group, then the full lab OU or
+security group. New laptops receive it automatically after joining that scope
+and signing in. To update all agents later, replace the one `netrem.exe` in the
+GPO folder; each laptop copies the new version at its next sign-in. Remove the
+GPO assignment to stop launching new agents at sign-in; existing agents stop
+when their user signs out or closes the window.
+
+The relay still runs as one server instance. The number of laptops is not fixed
+in the GPO or device list, but simultaneous screen sessions consume server
+bandwidth and memory. Test capacity against your expected concurrent viewers
+before a large rollout. Multiple relay instances would require a shared room
+store and Socket.IO adapter; the local device registry is for one instance.
 
 Wake-on-LAN across separate sites is a separate feature. It needs an awake
 sender on each site's local network. The relay's single `WAKE_MAC` setting is

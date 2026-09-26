@@ -8,6 +8,10 @@ let frameRequestedAt = 0;
 let lastFrameInfoAt = 0;
 let agentOnline = false;
 let legacyAgentNotified = false;
+let deviceOffset = 0;
+let deviceTotal = 0;
+let deviceQuery = '';
+let deviceLoading = false;
 
 const screen = $('screen');
 const empty = $('empty');
@@ -33,33 +37,51 @@ function showSettings(show) {
   $('settingsBtn').setAttribute('aria-expanded', String(show));
 }
 
-async function refreshDevices() {
+async function loadDevices(reset = false) {
+  if (deviceLoading) return;
   const token = $('token').value.trim();
   if (!token) {
     log('Enter the server token before loading devices.');
     return;
   }
+  if (reset) {
+    deviceOffset = 0;
+    deviceQuery = $('deviceSearch').value.trim();
+  }
+  deviceLoading = true;
+  $('refreshDevicesBtn').disabled = true;
+  $('loadMoreDevicesBtn').disabled = true;
   try {
-    const response = await fetch('/api/agents', {
+    const params = new URLSearchParams({ q: deviceQuery, offset: String(deviceOffset), limit: '100' });
+    const response = await fetch(`/api/agents?${params}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     const list = $('deviceList');
-    list.replaceChildren();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = result.agents.length ? 'Select a device' : 'No devices yet';
-    list.append(placeholder);
+    if (reset) {
+      list.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = result.total ? 'Select a device' : 'No matching devices';
+      list.append(placeholder);
+    }
     for (const agent of result.agents) {
       const option = document.createElement('option');
       option.value = agent.roomId;
       option.textContent = `${agent.online ? '●' : '○'} ${agent.device?.host || agent.roomId} (${agent.roomId})`;
       list.append(option);
     }
-    log(`${result.agents.length} lab room(s) loaded.`);
+    deviceOffset += result.agents.length;
+    deviceTotal = result.total;
+    $('deviceCount').textContent = `${deviceOffset} of ${deviceTotal} devices`;
+    $('loadMoreDevicesBtn').hidden = deviceOffset >= deviceTotal;
   } catch (error) {
     log(`Device list failed: ${error.message}`);
+  } finally {
+    deviceLoading = false;
+    $('refreshDevicesBtn').disabled = false;
+    $('loadMoreDevicesBtn').disabled = false;
   }
 }
 
@@ -244,7 +266,14 @@ function applyDeltaFrame({ image, mime, width, height, size, region }) {
 }
 
 $('screenBtn').addEventListener('click', requestScreen);
-$('refreshDevicesBtn').addEventListener('click', refreshDevices);
+$('refreshDevicesBtn').addEventListener('click', () => loadDevices(true));
+$('loadMoreDevicesBtn').addEventListener('click', () => loadDevices(false));
+$('deviceSearch').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    loadDevices(true);
+  }
+});
 $('deviceList').addEventListener('change', () => {
   if ($('deviceList').value) $('roomId').value = $('deviceList').value;
 });

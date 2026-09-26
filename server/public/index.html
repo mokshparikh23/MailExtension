@@ -61,10 +61,16 @@
           <div class="panel-section">
             <span class="eyebrow">Lab devices</span>
             <label class="field">
+              <span>Search device name or room</span>
+              <input id="deviceSearch" type="search" placeholder="e.g. LAB-PC07" />
+            </label>
+            <label class="field">
               <span>Choose a room</span>
               <select id="deviceList"><option value="">Refresh to load devices</option></select>
             </label>
             <button id="refreshDevicesBtn" class="ghost" type="button">Refresh devices</button>
+            <button id="loadMoreDevicesBtn" class="ghost" type="button" hidden>Load more</button>
+            <span id="deviceCount" class="eyebrow" aria-live="polite"></span>
           </div>
           <div class="panel-section">
             <span class="eyebrow">Session</span>

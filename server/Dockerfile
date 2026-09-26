@@ -8,6 +8,7 @@ RUN npm ci --omit=dev
 
 # App source
 COPY . .
+RUN mkdir -p /app/data && chown node:node /app/data
 
 ENV PORT=3000
 EXPOSE 3000

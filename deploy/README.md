@@ -63,7 +63,8 @@ docker compose up -d --build
 ```
 
 The container binds to `127.0.0.1:3000`; Nginx proxies `remote.yourdomain.com`
-to it.
+to it. The named `device_registry` volume preserves the known-device list
+across container rebuilds.
 
 ---
 

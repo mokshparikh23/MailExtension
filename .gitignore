@@ -6,3 +6,4 @@ agent/__pycache__/
 .env
 deploy/gpo/deployment.json
 deploy/gpo/netrem.exe
+server/data/

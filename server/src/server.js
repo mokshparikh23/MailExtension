@@ -5,6 +5,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
 const { sendMagicPacket } = require('./wake');
+const { loadRegistry, saveRegistry } = require('./registry');
 
 const PORT = Number(process.env.PORT || 3000);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'change-me-before-deploy';
@@ -12,6 +13,7 @@ const AGENT_TOKEN = process.env.AGENT_TOKEN || ACCESS_TOKEN;
 const WAKE_MAC = process.env.WAKE_MAC || '';
 const WAKE_BROADCAST = process.env.WAKE_BROADCAST || '255.255.255.255';
 const WAKE_PORT = Number(process.env.WAKE_PORT || 9);
+const DEVICE_REGISTRY_PATH = process.env.DEVICE_REGISTRY_PATH || path.join(__dirname, '..', 'data', 'devices.json');
 let lastWakeAt = 0;
 
 const app = express();
@@ -29,7 +31,35 @@ app.use(helmet({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-const rooms = new Map();
+const rooms = loadRegistry(DEVICE_REGISTRY_PATH);
+let registrySaveTimer = null;
+
+function saveDevices() {
+  if (registrySaveTimer) clearTimeout(registrySaveTimer);
+  registrySaveTimer = null;
+  try {
+    saveRegistry(DEVICE_REGISTRY_PATH, rooms);
+  } catch (error) {
+    console.error(`Could not save device registry: ${error.message}`);
+  }
+}
+
+function scheduleDeviceSave() {
+  if (registrySaveTimer) return;
+  registrySaveTimer = setTimeout(saveDevices, 500);
+  registrySaveTimer.unref();
+}
+
+function isValidRoomId(roomId) {
+  return typeof roomId === 'string' && roomId.length > 0 && roomId.length <= 128;
+}
+
+function normalizeDevice(device) {
+  if (!device || typeof device !== 'object') return {};
+  return Object.fromEntries(['host', 'platform', 'python', 'client', 'version']
+    .filter((key) => typeof device[key] === 'string')
+    .map((key) => [key, device[key].slice(0, 160)]));
+}
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
@@ -71,7 +101,7 @@ io.use(authorize);
 
 io.on('connection', (socket) => {
   socket.on('controller:join', ({ roomId } = {}) => {
-    if (!roomId || socket.data.role || !socket.data.scopes.includes('controller')) return;
+    if (!isValidRoomId(roomId) || socket.data.role || !socket.data.scopes.includes('controller')) return;
     const room = getRoom(roomId);
     room.controllerCount += 1;
     socket.data.role = 'controller';
@@ -85,16 +115,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('agent:join', ({ roomId, device } = {}) => {
-    if (!roomId || socket.data.role || !socket.data.scopes.includes('agent')) return;
+    if (!isValidRoomId(roomId) || socket.data.role || !socket.data.scopes.includes('agent')) return;
     const room = getRoom(roomId);
     room.agentSocketId = socket.id;
     room.controlAccessibility = null;
     room.lastSeenAt = Date.now();
-    room.device = device || {};
+    room.device = normalizeDevice(device);
     socket.data.role = 'agent';
     socket.data.roomId = roomId;
     socket.join(roomId);
     io.to(roomId).emit('room:status', room);
+    scheduleDeviceSave();
   });
 
   socket.on('controller:request-screen', ({ roomId, quality, forceFull }) => {
@@ -160,6 +191,7 @@ io.on('connection', (socket) => {
     if (role === 'agent' && room.agentSocketId === socket.id) room.agentSocketId = null;
     if (role === 'agent' && room.agentSocketId === null) room.controlAccessibility = null;
     io.to(roomId).emit('room:status', room);
+    if (role === 'agent') scheduleDeviceSave();
   });
 });
 
@@ -179,14 +211,25 @@ app.get('/api/agents', (req, res) => {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }
-  const agents = [...rooms.entries()].map(([roomId, room]) => ({
+  const limit = Number(req.query.limit ?? 100);
+  const offset = Number(req.query.offset ?? 0);
+  const query = String(req.query.q || '').trim().toLowerCase();
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 ||
+      !Number.isSafeInteger(offset) || offset < 0 || query.length > 100) {
+    res.status(400).json({ error: 'Invalid device list parameters.' });
+    return;
+  }
+  const agents = [...rooms.entries()].filter(([, room]) => room.lastSeenAt !== null)
+    .map(([roomId, room]) => ({
     roomId,
     online: Boolean(room.agentSocketId),
     device: room.device,
     lastSeenAt: room.lastSeenAt
-  }));
-  agents.sort((a, b) => Number(b.online) - Number(a.online) || a.roomId.localeCompare(b.roomId));
-  res.json({ agents });
+  })).filter((agent) => !query || agent.roomId.toLowerCase().includes(query) ||
+    String(agent.device?.host || '').toLowerCase().includes(query));
+  agents.sort((a, b) => Number(b.online) - Number(a.online) ||
+    (b.lastSeenAt - a.lastSeenAt) || a.roomId.localeCompare(b.roomId));
+  res.json({ agents: agents.slice(offset, offset + limit), total: agents.length, offset, limit });
 });
 
 app.post('/api/wake', async (req, res) => {
@@ -220,3 +263,10 @@ app.get('/health', (_req, res) => {
 server.listen(PORT, () => {
   console.log(`Internal remote-control relay listening on :${PORT}`);
 });
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    saveDevices();
+    process.exit(0);
+  });
+}

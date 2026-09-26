@@ -93,6 +93,26 @@ If the agent captures the same display where the browser controller is open, you
 - Or put the controller on monitor 1 and the tested MSB/lab screen on monitor 2, then set the agent monitor number to `2`.
 - Or use a VM display as the captured target and keep the browser controller outside the VM.
 
+## Windows Capture Protection Demo
+
+To see why a protected window can be blank in the remote viewer, copy the demo
+script with the `agent/` folder and run it on Laptop B (Windows) while the agent
+and browser controller are connected:
+
+```powershell
+cd agent
+py capture_protection_demo.py
+```
+
+Use **Exclude from capture** and **Allow capture** in the demo window, then
+compare Laptop B's display with the browser viewer on Laptop A. The toggle uses
+Windows `SetWindowDisplayAffinity` on the demo's own window. It does not change
+other apps or Windows permission prompts. If the demo is excluded, use Laptop B's
+own screen to click **Allow capture**.
+
+Windows 10 version 2004 or later is needed for `WDA_EXCLUDEFROMCAPTURE`. The
+result in a given capture tool may be a blank area or the window disappearing.
+
 ## Build Desktop Agent
 
 macOS:

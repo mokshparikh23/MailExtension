@@ -29,7 +29,7 @@
           <div class="screen-wrap">
             <div id="screenMeta" class="screen-meta">Size: 0 B | Type: -</div>
             <div id="deviceMeta" class="device-meta">Device: -, Version: -</div>
-            <img id="screen" alt="Remote screen will appear after the agent connects" />
+            <canvas id="screen" role="img" aria-label="Remote screen will appear after the agent connects"></canvas>
             <div id="empty">
               <div class="empty-icon">⌁</div>
               <strong>Waiting for paired device agent</strong>
@@ -80,11 +80,11 @@
           <div class="panel-grid">
             <label class="field">
               <span>Refresh interval (ms)</span>
-              <input id="interval" type="number" value="250" min="100" step="50" />
+              <input id="interval" type="number" value="100" min="100" step="50" />
             </label>
             <label class="field">
               <span>JPEG quality</span>
-              <input id="quality" type="number" value="60" min="10" max="90" />
+              <input id="quality" type="number" value="40" min="10" max="90" />
             </label>
           </div>
 

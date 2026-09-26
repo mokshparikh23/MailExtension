@@ -310,8 +310,7 @@ button:hover {
   bottom: 12px;
 }
 
-#screen:not([src]),
-#screen[src=""] {
+#screen:not([data-ready="true"]) {
   display: none;
 }
 

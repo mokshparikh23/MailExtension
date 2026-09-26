@@ -14,13 +14,12 @@ let deviceQuery = '';
 let deviceLoading = false;
 
 const screen = $('screen');
+const screenCtx = screen.getContext('2d', { alpha: false });
 const empty = $('empty');
 const logBox = $('log');
 const screenWrap = document.querySelector('.screen-wrap');
 const settingsPanel = $('settingsPanel');
 let fitMode = 'contain';
-let fullCanvas = null;
-let fullCtx = null;
 let hasFrame = false;
 
 function log(message) {
@@ -91,14 +90,14 @@ function requestScreen() {
   frameRequestedAt = Date.now();
   socket.emit('controller:request-screen', {
     roomId,
-    quality: Number($('quality').value || 60),
+    quality: Number($('quality').value || 40),
     forceFull: !hasFrame
   });
 }
 
 function startLive() {
   stopLive();
-  const interval = Math.max(100, Number($('interval').value || 250));
+  const interval = Math.max(100, Number($('interval').value || 100));
   liveTimer = setInterval(() => {
     if (!framePending || Date.now() - frameRequestedAt > 3000) requestScreen();
   }, interval);
@@ -112,19 +111,19 @@ function stopLive() {
 }
 
 function imageCoords(event) {
-  if (!screen.naturalWidth || !screen.naturalHeight) return null;
+  if (!hasFrame || !screen.width || !screen.height) return null;
   const rect = screen.getBoundingClientRect();
   const scale = fitMode === 'cover'
-    ? Math.max(rect.width / screen.naturalWidth, rect.height / screen.naturalHeight)
-    : Math.min(rect.width / screen.naturalWidth, rect.height / screen.naturalHeight);
-  const displayedWidth = screen.naturalWidth * scale;
-  const displayedHeight = screen.naturalHeight * scale;
+    ? Math.max(rect.width / screen.width, rect.height / screen.height)
+    : Math.min(rect.width / screen.width, rect.height / screen.height);
+  const displayedWidth = screen.width * scale;
+  const displayedHeight = screen.height * scale;
   const offsetX = (rect.width - displayedWidth) / 2;
   const offsetY = (rect.height - displayedHeight) / 2;
   const x = (event.clientX - rect.left - offsetX) / scale;
   const y = (event.clientY - rect.top - offsetY) / scale;
-  if (x < 0 || y < 0 || x > screen.naturalWidth || y > screen.naturalHeight) return null;
-  return { x, y, screenSize: { width: screen.naturalWidth, height: screen.naturalHeight } };
+  if (x < 0 || y < 0 || x > screen.width || y > screen.height) return null;
+  return { x, y, screenSize: { width: screen.width, height: screen.height } };
 }
 
 $('connectBtn').addEventListener('click', () => {
@@ -141,8 +140,7 @@ $('connectBtn').addEventListener('click', () => {
   socket.on('connect', () => {
     agentOnline = false;
     hasFrame = false;
-    fullCanvas = null;
-    fullCtx = null;
+    screen.dataset.ready = 'false';
     setStatus(`Connected: ${roomId}`);
     socket.emit('controller:join', { roomId });
     log(`Joined room ${roomId} as controller.`);
@@ -222,23 +220,13 @@ function formatType(type) {
   return type;
 }
 
-function ensureCanvas(width, height) {
-  if (!fullCanvas) {
-    fullCanvas = document.createElement('canvas');
-    fullCtx = fullCanvas.getContext('2d');
-  }
-  if (fullCanvas.width !== width || fullCanvas.height !== height) {
-    fullCanvas.width = width;
-    fullCanvas.height = height;
-  }
-}
-
 function applyFullFrame({ image, mime, width, height, size }) {
   const img = new Image();
   img.onload = () => {
-    ensureCanvas(img.naturalWidth, img.naturalHeight);
-    fullCtx.drawImage(img, 0, 0);
-    screen.src = img.src;
+    if (screen.width !== img.naturalWidth) screen.width = img.naturalWidth;
+    if (screen.height !== img.naturalHeight) screen.height = img.naturalHeight;
+    screenCtx.drawImage(img, 0, 0);
+    screen.dataset.ready = 'true';
     empty.style.display = 'none';
     hasFrame = true;
     framePending = false;
@@ -248,15 +236,14 @@ function applyFullFrame({ image, mime, width, height, size }) {
 }
 
 function applyDeltaFrame({ image, mime, width, height, size, region }) {
-  if (!fullCanvas || !fullCtx || !region) {
+  if (!hasFrame || !region || screen.width !== width || screen.height !== height) {
     framePending = false;
-    socket.emit('controller:request-screen', { roomId, quality: Number($('quality').value || 60), forceFull: true });
+    socket.emit('controller:request-screen', { roomId, quality: Number($('quality').value || 40), forceFull: true });
     return;
   }
   const img = new Image();
   img.onload = () => {
-    fullCtx.drawImage(img, region.x, region.y);
-    screen.src = fullCanvas.toDataURL('image/png');
+    screenCtx.drawImage(img, region.x, region.y);
     empty.style.display = 'none';
     hasFrame = true;
     framePending = false;

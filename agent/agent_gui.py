@@ -35,8 +35,8 @@ SPECIAL_KEYS = {
 class RemoteAgentApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("RDP Agent - Remote Control")
-        self.root.geometry("460x500")
+        self.root.title("netrem - Remote Control")
+        self.root.geometry("420x520")
         self.root.resizable(False, False)
 
         self.sio = None
@@ -51,31 +51,35 @@ class RemoteAgentApp:
         self.token_var = tk.StringVar(value="test-secret-123")
         self.monitor_var = tk.StringVar(value="1")
         self.status_var = tk.StringVar(value="Disconnected")
+        self.room_status_var = tk.StringVar(value="Not connected")
+        self.device_var = tk.StringVar(value=f"Device: {socket.gethostname()}")
 
         self.build_ui()
 
     def build_ui(self):
-        self.root.configure(bg="#0b111a")
+        self.root.configure(bg="#f4f7fb")
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#0b111a")
-        style.configure("Card.TFrame", background="#111827", relief="flat")
-        style.configure("TLabel", background="#0b111a", foreground="#dbe7f6", font=("Arial", 12))
-        style.configure("Muted.TLabel", background="#0b111a", foreground="#8fa0b7", font=("Arial", 10))
-        style.configure("Title.TLabel", background="#0b111a", foreground="#f8fafc", font=("Arial", 22, "bold"))
-        style.configure("Status.TLabel", background="#111827", foreground="#67e8f9", font=("Arial", 12, "bold"))
+        style.configure("TFrame", background="#f4f7fb")
+        style.configure("Card.TFrame", background="#ffffff", relief="flat")
+        style.configure("TLabel", background="#f4f7fb", foreground="#263243", font=("Arial", 11))
+        style.configure("Muted.TLabel", background="#f4f7fb", foreground="#6b7788", font=("Arial", 9))
+        style.configure("Title.TLabel", background="#f4f7fb", foreground="#1665c1", font=("Arial", 24, "bold"))
+        style.configure("Version.TLabel", background="#f4f7fb", foreground="#9aa5b5", font=("Arial", 9, "bold"))
+        style.configure("Status.TLabel", background="#ffffff", foreground="#23996b", font=("Arial", 12, "bold"))
         style.configure("TButton", font=("Arial", 12, "bold"), padding=10)
-        style.configure("TEntry", fieldbackground="#070b12", foreground="#f8fafc", padding=8)
+        style.configure("TEntry", fieldbackground="#ffffff", foreground="#111827", padding=8)
 
-        frame = ttk.Frame(self.root, padding=24)
+        frame = ttk.Frame(self.root, padding=22)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="RDP Agent", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            frame,
-            text="Visible paired-device client for internal lab testing.",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(4, 22))
+        ttk.Label(frame, text="netrem", style="Title.TLabel").pack(anchor="center")
+        ttk.Label(frame, text=f"v{AGENT_VERSION}", style="Version.TLabel").pack(anchor="center", pady=(2, 18))
+
+        status_card = ttk.Frame(frame, style="Card.TFrame", padding=16)
+        status_card.pack(fill="x", pady=(0, 16))
+        ttk.Label(status_card, textvariable=self.room_status_var, style="Status.TLabel").pack(anchor="center")
+        ttk.Label(status_card, textvariable=self.device_var, style="Muted.TLabel").pack(anchor="center", pady=(6, 0))
 
         self.add_field(frame, "Server URL", self.server_var)
         self.add_field(frame, "Room ID", self.room_var)
@@ -87,15 +91,12 @@ class RemoteAgentApp:
         ttk.Button(actions, text="Connect", command=self.connect).pack(side="left", fill="x", expand=True)
         ttk.Button(actions, text="Disconnect", command=self.disconnect).pack(side="left", padx=(10, 0), fill="x", expand=True)
 
-        status_card = ttk.Frame(frame, style="Card.TFrame", padding=16)
-        status_card.pack(fill="x")
-        ttk.Label(status_card, textvariable=self.status_var, style="Status.TLabel").pack(anchor="center")
+        ttk.Label(frame, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="center")
 
         notice = (
-            "This agent shares this device screen and accepts remote input commands. "
-            "Use only on devices you own or where the user has explicitly consented."
+            "Visible lab agent: shares this device screen and accepts remote input commands for authorized testing."
         )
-        ttk.Label(frame, text=notice, style="Muted.TLabel", wraplength=400).pack(anchor="w", pady=(18, 0))
+        ttk.Label(frame, text=notice, style="Muted.TLabel", wraplength=360, justify="center").pack(anchor="center", pady=(14, 0))
 
     def add_field(self, parent, label, variable, show=None):
         ttk.Label(parent, text=label).pack(anchor="w", pady=(0, 6))
@@ -105,6 +106,9 @@ class RemoteAgentApp:
 
     def set_status(self, text):
         self.root.after(0, self.status_var.set, text)
+
+    def set_room_status(self, text):
+        self.root.after(0, self.room_status_var.set, text)
 
     def connect(self):
         if self.sio and self.sio.connected:
@@ -122,6 +126,7 @@ class RemoteAgentApp:
             return
 
         self.set_status("Connecting...")
+        self.set_room_status("Connecting...")
         thread = threading.Thread(target=self.connect_worker, args=(server, token), daemon=True)
         thread.start()
 
@@ -138,11 +143,13 @@ class RemoteAgentApp:
         if self.sio:
             self.sio.disconnect()
         self.set_status("Disconnected")
+        self.set_room_status("Not connected")
 
     def register_socket_handlers(self):
         @self.sio.event
         def connect():
             self.set_status(f"Connected to room {self.room_id}")
+            self.set_room_status(f"Connected to room\n{self.room_id}")
             self.sio.emit("agent:join", {
                 "roomId": self.room_id,
                 "device": {
@@ -157,6 +164,7 @@ class RemoteAgentApp:
         @self.sio.event
         def disconnect():
             self.set_status("Disconnected")
+            self.set_room_status("Reconnecting...")
 
         @self.sio.event
         def connect_error(data):

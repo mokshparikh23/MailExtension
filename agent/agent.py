@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--room", required=True, help="Room ID shown to the controller.")
     parser.add_argument("--token", required=True, help="Shared ACCESS_TOKEN configured on the relay.")
     parser.add_argument("--quality", type=int, default=45, help="Default JPEG quality, 10-90.")
+    parser.add_argument("--monitor", type=int, default=1, help="Monitor number to capture. Use 1 for primary.")
     return parser.parse_args()
 
 
@@ -95,10 +96,16 @@ def crop_rgb(rgb, width, region):
     return b"".join(rows)
 
 
+def selected_monitor(sct):
+    if args.monitor < 1 or args.monitor >= len(sct.monitors):
+        return sct.monitors[1]
+    return sct.monitors[args.monitor]
+
+
 def capture_screen(force_full=False):
     global last_rgb, last_size
     with mss() as sct:
-        monitor = sct.monitors[1]
+        monitor = selected_monitor(sct)
         raw = sct.grab(monitor)
         current_rgb = raw.rgb
         current_size = raw.size
@@ -188,7 +195,7 @@ def on_mouse_move(data):
     remote_width = float(size.get("width") or 1)
     remote_height = float(size.get("height") or 1)
     with mss() as sct:
-        monitor = sct.monitors[1]
+        monitor = selected_monitor(sct)
     x = monitor["left"] + (float(data.get("x", 0)) / remote_width) * monitor["width"]
     y = monitor["top"] + (float(data.get("y", 0)) / remote_height) * monitor["height"]
     mouse.position = (int(x), int(y))

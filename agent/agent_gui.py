@@ -36,7 +36,7 @@ class RemoteAgentApp:
     def __init__(self, root):
         self.root = root
         self.root.title("RDP Agent - Remote Control")
-        self.root.geometry("460x440")
+        self.root.geometry("460x500")
         self.root.resizable(False, False)
 
         self.sio = None
@@ -49,6 +49,7 @@ class RemoteAgentApp:
         self.server_var = tk.StringVar(value="http://localhost:3000")
         self.room_var = tk.StringVar(value="test123")
         self.token_var = tk.StringVar(value="test-secret-123")
+        self.monitor_var = tk.StringVar(value="1")
         self.status_var = tk.StringVar(value="Disconnected")
 
         self.build_ui()
@@ -79,6 +80,7 @@ class RemoteAgentApp:
         self.add_field(frame, "Server URL", self.server_var)
         self.add_field(frame, "Room ID", self.room_var)
         self.add_field(frame, "Access Token", self.token_var, show="*")
+        self.add_field(frame, "Monitor number", self.monitor_var)
 
         actions = ttk.Frame(frame)
         actions.pack(fill="x", pady=(14, 18))
@@ -112,9 +114,11 @@ class RemoteAgentApp:
         server = self.server_var.get().strip()
         self.room_id = self.room_var.get().strip()
         token = self.token_var.get().strip()
+        self.last_rgb = None
+        self.last_size = None
 
-        if not server or not self.room_id or not token:
-            messagebox.showerror("Missing fields", "Server URL, Room ID, and Access Token are required.")
+        if not server or not self.room_id or not token or not self.monitor_var.get().strip():
+            messagebox.showerror("Missing fields", "Server URL, Room ID, Access Token, and Monitor number are required.")
             return
 
         self.set_status("Connecting...")
@@ -173,7 +177,7 @@ class RemoteAgentApp:
             remote_width = float(size.get("width") or 1)
             remote_height = float(size.get("height") or 1)
             with mss() as sct:
-                monitor = sct.monitors[1]
+                monitor = self.selected_monitor(sct)
             x = monitor["left"] + (float(data.get("x", 0)) / remote_width) * monitor["width"]
             y = monitor["top"] + (float(data.get("y", 0)) / remote_height) * monitor["height"]
             self.mouse.position = (int(x), int(y))
@@ -248,7 +252,7 @@ class RemoteAgentApp:
 
     def capture_screen(self, force_full=False):
         with mss() as sct:
-            monitor = sct.monitors[1]
+            monitor = self.selected_monitor(sct)
             raw = sct.grab(monitor)
             current_rgb = raw.rgb
             current_size = raw.size
@@ -288,6 +292,15 @@ class RemoteAgentApp:
             "height": raw.height,
             "size": len(data),
         }
+
+    def selected_monitor(self, sct):
+        try:
+            index = int(self.monitor_var.get().strip())
+        except ValueError:
+            index = 1
+        if index < 1 or index >= len(sct.monitors):
+            index = 1
+        return sct.monitors[index]
 
     def key_from_name(self, name):
         if name in SPECIAL_KEYS:

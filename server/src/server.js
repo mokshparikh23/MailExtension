@@ -31,6 +31,7 @@ function getRoom(roomId) {
       createdAt: Date.now(),
       controllerCount: 0,
       agentSocketId: null,
+      controlAccessibility: null,
       lastSeenAt: null,
       device: null
     });
@@ -58,6 +59,9 @@ io.on('connection', (socket) => {
     socket.data.roomId = roomId;
     socket.join(roomId);
     socket.emit('room:status', room);
+    if (room.controlAccessibility !== null) {
+      socket.emit('controller:control-status', { accessibility: room.controlAccessibility });
+    }
     socket.to(roomId).emit('room:status', room);
   });
 
@@ -65,6 +69,7 @@ io.on('connection', (socket) => {
     if (!roomId) return;
     const room = getRoom(roomId);
     room.agentSocketId = socket.id;
+    room.controlAccessibility = null;
     room.lastSeenAt = Date.now();
     room.device = device || {};
     socket.data.role = 'agent';
@@ -80,19 +85,35 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('agent:screen', ({ roomId, image, width, height, size }) => {
+  socket.on('agent:screen', ({ roomId, image, mime, width, height, size, type, region }) => {
     const room = getRoom(roomId);
     room.lastSeenAt = Date.now();
-    socket.to(roomId).emit('controller:screen', { image, width, height, size });
+    socket.to(roomId).emit('controller:screen', { image, mime, width, height, size, type, region });
     io.to(roomId).emit('room:status', room);
+  });
+
+  socket.on('agent:control-status', ({ roomId, accessibility }) => {
+    if (socket.data.role !== 'agent' || socket.data.roomId !== roomId) return;
+    getRoom(roomId).controlAccessibility = accessibility;
+    socket.to(roomId).emit('controller:control-status', { accessibility });
+  });
+
+  socket.on('agent:control-result', ({ roomId, action, error }) => {
+    if (socket.data.role !== 'agent' || socket.data.roomId !== roomId) return;
+    socket.to(roomId).emit('controller:control-result', { action, error });
   });
 
   socket.on('controller:mouse-move', ({ roomId, x, y, screenSize }) => {
     socket.to(roomId).emit('agent:mouse-move', { x, y, screenSize });
   });
 
-  socket.on('controller:mouse-click', ({ roomId, button }) => {
-    socket.to(roomId).emit('agent:mouse-click', { button });
+  socket.on('controller:mouse-click', ({ roomId, button, x, y, screenSize }) => {
+    // Older agents move and click through separate handlers. Socket.IO keeps
+    // these events in order; updated agents can also use the click coordinates.
+    if (Number.isFinite(x) && Number.isFinite(y) && screenSize) {
+      socket.to(roomId).emit('agent:mouse-move', { x, y, screenSize });
+    }
+    socket.to(roomId).emit('agent:mouse-click', { button, x, y, screenSize });
   });
 
   socket.on('controller:mouse-scroll', ({ roomId, deltaY }) => {
@@ -109,6 +130,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (role === 'controller') room.controllerCount = Math.max(0, room.controllerCount - 1);
     if (role === 'agent' && room.agentSocketId === socket.id) room.agentSocketId = null;
+    if (role === 'agent' && room.agentSocketId === null) room.controlAccessibility = null;
     io.to(roomId).emit('room:status', room);
   });
 });

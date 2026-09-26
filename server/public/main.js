@@ -3,11 +3,17 @@ const $ = (id) => document.getElementById(id);
 let socket = null;
 let roomId = null;
 let liveTimer = null;
+let framePending = false;
+let frameRequestedAt = 0;
+let lastFrameInfoAt = 0;
+let agentOnline = false;
+let legacyAgentNotified = false;
 
 const screen = $('screen');
 const empty = $('empty');
 const logBox = $('log');
 const screenWrap = document.querySelector('.screen-wrap');
+const settingsPanel = $('settingsPanel');
 let fitMode = 'contain';
 let fullCanvas = null;
 let fullCtx = null;
@@ -22,31 +28,49 @@ function setStatus(text) {
   $('status').textContent = text;
 }
 
+function showSettings(show) {
+  settingsPanel.hidden = !show;
+  $('settingsBtn').setAttribute('aria-expanded', String(show));
+}
+
 function requestScreen() {
-  if (!socket || !roomId) return;
+  if (!socket?.connected || !roomId) return;
+  framePending = true;
+  frameRequestedAt = Date.now();
   socket.emit('controller:request-screen', {
     roomId,
-    quality: Number($('quality').value || 45),
+    quality: Number($('quality').value || 60),
     forceFull: !hasFrame
   });
 }
 
 function startLive() {
   stopLive();
-  liveTimer = setInterval(requestScreen, Math.max(250, Number($('interval').value || 1000)));
+  const interval = Math.max(100, Number($('interval').value || 250));
+  liveTimer = setInterval(() => {
+    if (!framePending || Date.now() - frameRequestedAt > 3000) requestScreen();
+  }, interval);
   requestScreen();
 }
 
 function stopLive() {
   if (liveTimer) clearInterval(liveTimer);
   liveTimer = null;
+  framePending = false;
 }
 
 function imageCoords(event) {
   if (!screen.naturalWidth || !screen.naturalHeight) return null;
   const rect = screen.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width) * screen.naturalWidth;
-  const y = ((event.clientY - rect.top) / rect.height) * screen.naturalHeight;
+  const scale = fitMode === 'cover'
+    ? Math.max(rect.width / screen.naturalWidth, rect.height / screen.naturalHeight)
+    : Math.min(rect.width / screen.naturalWidth, rect.height / screen.naturalHeight);
+  const displayedWidth = screen.naturalWidth * scale;
+  const displayedHeight = screen.naturalHeight * scale;
+  const offsetX = (rect.width - displayedWidth) / 2;
+  const offsetY = (rect.height - displayedHeight) / 2;
+  const x = (event.clientX - rect.left - offsetX) / scale;
+  const y = (event.clientY - rect.top - offsetY) / scale;
   if (x < 0 || y < 0 || x > screen.naturalWidth || y > screen.naturalHeight) return null;
   return { x, y, screenSize: { width: screen.naturalWidth, height: screen.naturalHeight } };
 }
@@ -63,9 +87,20 @@ $('connectBtn').addEventListener('click', () => {
   socket = io({ auth: { token } });
 
   socket.on('connect', () => {
+    agentOnline = false;
+    hasFrame = false;
+    fullCanvas = null;
+    fullCtx = null;
     setStatus(`Connected: ${roomId}`);
     socket.emit('controller:join', { roomId });
     log(`Joined room ${roomId} as controller.`);
+    showSettings(false);
+    if ($('live').checked) startLive();
+  });
+
+  socket.on('disconnect', () => {
+    stopLive();
+    setStatus('Disconnected');
   });
 
   socket.on('connect_error', (err) => {
@@ -78,24 +113,43 @@ $('connectBtn').addEventListener('click', () => {
     setStatus(`${roomId} - ${agent}`);
     if (room.device) {
       $('deviceMeta').textContent = `Device: ${room.device.host || '-'}, Version: ${room.device.version || '-'}`;
+      if (room.agentSocketId && !room.device.version && !legacyAgentNotified) {
+        log('Laptop B is running an older agent. Update it to reduce click delay.');
+        legacyAgentNotified = true;
+      }
     }
+    if (room.agentSocketId && !agentOnline) {
+      hasFrame = false;
+      if ($('live').checked) requestScreen();
+    }
+    agentOnline = Boolean(room.agentSocketId);
   });
 
   socket.on('controller:screen', ({ image, mime, width, height, size, type, region }) => {
     const frameType = type || 'FULL';
     $('screenMeta').textContent = `Size: ${formatBytes(size || 0)} | Type: ${formatType(frameType)}`;
-
+    if (Date.now() - lastFrameInfoAt > 1000) {
+      $('streamInfo').textContent = `${width} × ${height} · ${Math.round((size || 0) / 1024)} KB/frame${mime === 'image/png' ? ' · PNG stream' : ''}`;
+      lastFrameInfoAt = Date.now();
+    }
     if (frameType === 'NO_CHANGE') {
-      log(`Screen ${width || '-'}x${height || '-'}, 0 KB, no change`);
+      framePending = false;
       return;
     }
-
     if (frameType === 'DELTA') {
       applyDeltaFrame({ image, mime, width, height, size, region });
       return;
     }
-
     applyFullFrame({ image, mime, width, height, size });
+  });
+
+  socket.on('controller:control-status', ({ accessibility }) => {
+    if (accessibility === false) log('Laptop B: Accessibility permission is missing. Enable it and restart the agent.');
+    else if (accessibility === true) log('Laptop B: Accessibility permission granted.');
+  });
+
+  socket.on('controller:control-result', ({ action, error }) => {
+    log(error ? `${action} failed on Laptop B: ${error}` : `${action} reached Laptop B.`);
   });
 });
 
@@ -132,17 +186,19 @@ function applyFullFrame({ image, mime, width, height, size }) {
   img.onload = () => {
     ensureCanvas(img.naturalWidth, img.naturalHeight);
     fullCtx.drawImage(img, 0, 0);
-    screen.src = fullCanvas.toDataURL('image/png');
+    screen.src = img.src;
     empty.style.display = 'none';
     hasFrame = true;
-    log(`Screen ${width}x${height}, ${formatBytes(size)}, FULL`);
+    framePending = false;
   };
+  img.onerror = () => { framePending = false; hasFrame = false; };
   img.src = `data:${mime || 'image/png'};base64,${image}`;
 }
 
 function applyDeltaFrame({ image, mime, width, height, size, region }) {
   if (!fullCanvas || !fullCtx || !region) {
-    socket.emit('controller:request-screen', { roomId, quality: Number($('quality').value || 45), forceFull: true });
+    framePending = false;
+    socket.emit('controller:request-screen', { roomId, quality: Number($('quality').value || 60), forceFull: true });
     return;
   }
   const img = new Image();
@@ -151,18 +207,27 @@ function applyDeltaFrame({ image, mime, width, height, size, region }) {
     screen.src = fullCanvas.toDataURL('image/png');
     empty.style.display = 'none';
     hasFrame = true;
-    log(`Screen ${width}x${height}, ${formatBytes(size)}, DELTA ${region.width}x${region.height}`);
+    framePending = false;
   };
+  img.onerror = () => { framePending = false; hasFrame = false; };
   img.src = `data:${mime || 'image/png'};base64,${image}`;
 }
 
 $('screenBtn').addEventListener('click', requestScreen);
 $('live').addEventListener('change', (event) => event.target.checked ? startLive() : stopLive());
+$('interval').addEventListener('change', () => {
+  if ($('live').checked && socket?.connected) startLive();
+});
+$('settingsBtn').addEventListener('click', () => showSettings(settingsPanel.hidden));
+$('closeSettingsBtn').addEventListener('click', () => showSettings(false));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !settingsPanel.hidden) showSettings(false);
+});
 
 $('fitBtn').addEventListener('click', () => {
   fitMode = fitMode === 'contain' ? 'cover' : 'contain';
   screenWrap.dataset.fit = fitMode;
-  $('fitBtn').textContent = fitMode === 'contain' ? 'Fill' : 'Fit';
+  $('fitBtn').textContent = fitMode === 'contain' ? 'Fill area (crop)' : 'Show full screen';
 });
 
 $('fullscreenBtn').addEventListener('click', async () => {
@@ -177,8 +242,8 @@ screen.addEventListener('click', (event) => {
   if (!$('mouse').checked || !socket) return;
   const coords = imageCoords(event);
   if (!coords) return;
-  socket.emit('controller:mouse-move', { roomId, ...coords });
-  socket.emit('controller:mouse-click', { roomId, button: 'left' });
+  socket.emit('controller:mouse-click', { roomId, button: 'left', ...coords });
+  log('Mouse click sent to Laptop B.');
 });
 
 screen.addEventListener('contextmenu', (event) => {
@@ -186,8 +251,8 @@ screen.addEventListener('contextmenu', (event) => {
   if (!$('mouse').checked || !socket) return;
   const coords = imageCoords(event);
   if (!coords) return;
-  socket.emit('controller:mouse-move', { roomId, ...coords });
-  socket.emit('controller:mouse-click', { roomId, button: 'right' });
+  socket.emit('controller:mouse-click', { roomId, button: 'right', ...coords });
+  log('Right click sent to Laptop B.');
 });
 
 screen.addEventListener('wheel', (event) => {
@@ -208,4 +273,5 @@ document.addEventListener('keydown', (event) => {
     shiftKey: event.shiftKey,
     metaKey: event.metaKey
   });
+  log('Keyboard input sent to Laptop B.');
 });

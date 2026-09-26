@@ -1,16 +1,20 @@
 import argparse
 import base64
+import ctypes
+import io
 import platform
 import socket
 import sys
 import time
 
 import socketio
-from mss import mss, tools
+from mss import mss
+from PIL import Image, ImageChops
 from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
+AGENT_VERSION = "1.2.0"
 SPECIAL_KEYS = {
     "Backspace": Key.backspace,
     "Delete": Key.delete,
@@ -36,6 +40,7 @@ def parse_args():
     parser.add_argument("--token", required=True, help="Shared ACCESS_TOKEN configured on the relay.")
     parser.add_argument("--quality", type=int, default=45, help="Default JPEG quality, 10-90.")
     parser.add_argument("--monitor", type=int, default=1, help="Monitor number to capture. Use 1 for primary.")
+    parser.add_argument("--max-width", type=int, default=1600, help="Maximum screen image width in pixels.")
     return parser.parse_args()
 
 
@@ -43,9 +48,8 @@ args = parse_args()
 mouse = MouseController()
 keyboard = KeyboardController()
 sio = socketio.Client(reconnection=True)
-AGENT_VERSION = "1.1.0"
-last_rgb = None
-last_size = None
+monitor_geometry = None
+last_image = None
 
 
 def print_consent_notice():
@@ -59,92 +63,52 @@ def print_consent_notice():
     print("")
 
 
-def changed_region(previous, current, width, height):
-    min_x = width
-    min_y = height
-    max_x = -1
-    max_y = -1
-    stride = width * 3
-
-    for y in range(height):
-        row_start = y * stride
-        previous_row = previous[row_start:row_start + stride]
-        current_row = current[row_start:row_start + stride]
-        if previous_row == current_row:
-            continue
-
-        for x in range(width):
-            index = x * 3
-            if previous_row[index:index + 3] != current_row[index:index + 3]:
-                min_x = min(min_x, x)
-                max_x = max(max_x, x)
-        min_y = min(min_y, y)
-        max_y = max(max_y, y)
-
-    if max_x < 0:
-        return None
-    return {"x": min_x, "y": min_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
-
-
-def crop_rgb(rgb, width, region):
-    stride = width * 3
-    crop_stride = region["width"] * 3
-    rows = []
-    for y in range(region["y"], region["y"] + region["height"]):
-        start = y * stride + region["x"] * 3
-        rows.append(rgb[start:start + crop_stride])
-    return b"".join(rows)
-
-
 def selected_monitor(sct):
     if args.monitor < 1 or args.monitor >= len(sct.monitors):
         return sct.monitors[1]
     return sct.monitors[args.monitor]
 
 
-def capture_screen(force_full=False):
-    global last_rgb, last_size
-    with mss() as sct:
-        monitor = selected_monitor(sct)
-        raw = sct.grab(monitor)
-        current_rgb = raw.rgb
-        current_size = raw.size
-
-    if not force_full and last_rgb is not None and last_size == current_size:
-        region = changed_region(last_rgb, current_rgb, raw.width, raw.height)
-        last_rgb = current_rgb
-        if region is None:
-            return {
-                "type": "NO_CHANGE",
-                "mime": "image/png",
-                "width": raw.width,
-                "height": raw.height,
-                "size": 0,
-            }
-
-        cropped = crop_rgb(current_rgb, raw.width, region)
-        data = tools.to_png(cropped, (region["width"], region["height"]))
-        return {
-            "type": "DELTA",
-            "image": base64.b64encode(data).decode("ascii"),
-            "mime": "image/png",
-            "width": raw.width,
-            "height": raw.height,
-            "size": len(data),
-            "region": region,
-        }
-
-    data = tools.to_png(current_rgb, current_size)
-    last_rgb = current_rgb
-    last_size = current_size
+def encode_frame(image, quality):
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=max(10, min(int(quality), 90)))
+    data = output.getvalue()
     return {
-        "type": "FULL",
         "image": base64.b64encode(data).decode("ascii"),
-        "mime": "image/png",
-        "width": raw.width,
-        "height": raw.height,
+        "mime": "image/jpeg",
         "size": len(data),
     }
+
+
+def capture_screen(force_full=False, quality=None):
+    global last_image, monitor_geometry
+    with mss() as sct:
+        monitor = selected_monitor(sct)
+        monitor_geometry = monitor.copy()
+        raw = sct.grab(monitor)
+    image = Image.frombytes("RGB", raw.size, raw.rgb)
+    if args.max_width > 0 and image.width > args.max_width:
+        image.thumbnail((args.max_width, image.height), Image.Resampling.LANCZOS)
+
+    if not force_full and last_image is not None and last_image.size == image.size:
+        box = ImageChops.difference(last_image, image).getbbox()
+        last_image = image
+        if box is None:
+            return {"type": "NO_CHANGE", "width": image.width, "height": image.height, "size": 0}
+        x1, y1, x2, y2 = box
+        frame = encode_frame(image.crop(box), quality or args.quality)
+        frame.update({
+            "type": "DELTA",
+            "width": image.width,
+            "height": image.height,
+            "region": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
+        })
+        return frame
+
+    last_image = image
+    frame = encode_frame(image, quality or args.quality)
+    frame.update({"type": "FULL", "width": image.width, "height": image.height})
+    return frame
 
 
 def key_from_name(name):
@@ -153,6 +117,27 @@ def key_from_name(name):
     if len(name) == 1:
         return name
     return None
+
+
+def accessibility_allowed():
+    if sys.platform != "darwin":
+        return None
+    try:
+        framework = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        framework.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(framework.AXIsProcessTrusted())
+    except OSError:
+        return None
+
+
+def report_control(action, error=None):
+    sio.emit("agent:control-result", {
+        "roomId": args.room,
+        "action": action,
+        "error": str(error) if error else None,
+    })
 
 
 @sio.event
@@ -167,6 +152,10 @@ def connect():
             "version": AGENT_VERSION,
         },
     })
+    allowed = accessibility_allowed()
+    if allowed is not None:
+        print(f"Accessibility permission: {'granted' if allowed else 'missing'}")
+        sio.emit("agent:control-status", {"roomId": args.room, "accessibility": allowed})
 
 
 @sio.event
@@ -182,7 +171,7 @@ def disconnect():
 @sio.on("agent:capture-screen")
 def on_capture_screen(data):
     try:
-        frame = capture_screen(data.get("forceFull", False))
+        frame = capture_screen(data.get("forceFull", False), data.get("quality", args.quality))
         frame["roomId"] = args.room
         sio.emit("agent:screen", frame)
     except Exception as exc:
@@ -191,11 +180,14 @@ def on_capture_screen(data):
 
 @sio.on("agent:mouse-move")
 def on_mouse_move(data):
+    global monitor_geometry
     size = data.get("screenSize") or {}
     remote_width = float(size.get("width") or 1)
     remote_height = float(size.get("height") or 1)
-    with mss() as sct:
-        monitor = selected_monitor(sct)
+    if monitor_geometry is None:
+        with mss() as sct:
+            monitor_geometry = selected_monitor(sct).copy()
+    monitor = monitor_geometry
     x = monitor["left"] + (float(data.get("x", 0)) / remote_width) * monitor["width"]
     y = monitor["top"] + (float(data.get("y", 0)) / remote_height) * monitor["height"]
     mouse.position = (int(x), int(y))
@@ -203,8 +195,15 @@ def on_mouse_move(data):
 
 @sio.on("agent:mouse-click")
 def on_mouse_click(data):
-    button = Button.right if data.get("button") == "right" else Button.left
-    mouse.click(button, 1)
+    try:
+        if "x" in data and "y" in data:
+            on_mouse_move(data)
+        button = Button.right if data.get("button") == "right" else Button.left
+        mouse.click(button, 1)
+        report_control("mouse click")
+    except Exception as exc:
+        print(f"Mouse click failed: {exc}")
+        report_control("mouse click", exc)
 
 
 @sio.on("agent:mouse-scroll")
@@ -217,6 +216,7 @@ def on_mouse_scroll(data):
 def on_key(data):
     key = key_from_name(data.get("key", ""))
     if key is None:
+        report_control("key", f"Unsupported key: {data.get('key')}")
         return
 
     modifiers = []
@@ -229,12 +229,21 @@ def on_key(data):
     if data.get("metaKey"):
         modifiers.append(Key.cmd)
 
-    for mod in modifiers:
-        keyboard.press(mod)
-    keyboard.press(key)
-    keyboard.release(key)
-    for mod in reversed(modifiers):
-        keyboard.release(mod)
+    try:
+        for mod in modifiers:
+            keyboard.press(mod)
+        keyboard.press(key)
+        keyboard.release(key)
+        report_control("key")
+    except Exception as exc:
+        print(f"Keyboard input failed: {exc}")
+        report_control("key", exc)
+    finally:
+        for mod in reversed(modifiers):
+            try:
+                keyboard.release(mod)
+            except Exception:
+                pass
 
 
 def main():

@@ -66,8 +66,24 @@ In the browser controller:
 
 - Server token: `replace-with-a-long-random-token`
 - Room ID: `test123`
-- Click `Connect`
-- Click `Get Screen`
+- Open **Settings** and click **Connect**. The settings panel closes so the remote screen fills the page.
+- Live share and mouse control start enabled. Use **Fullscreen** for the largest view.
+
+## Two-Laptop Test on the Same Network
+
+Run the server on Laptop A. Find Laptop A's local IP address, then open the controller on Laptop A at `http://localhost:3000` (or `http://<laptop-a-ip>:3000` from another device).
+
+Copy the current `agent/` folder to Laptop B. On Laptop B, install or update its dependencies and start the agent:
+
+```bash
+cd agent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python agent.py --server http://<laptop-a-ip>:3000 --room test123 --token replace-with-a-long-random-token
+```
+
+Use the same token and room ID in the controller's Settings. On macOS, allow Screen Recording and Accessibility for the app running the agent, then restart the agent. When updating from an earlier version, copy the updated `agent.py` and `requirements.txt` to Laptop B (or unpack [`agent-update.zip`](agent-update.zip)), rerun `pip install -r requirements.txt`, and restart the agent. The CLI agent sends resized JPEG full and delta frames and applies click coordinates in a single event, which reduces visible delay.
 
 ## Avoid Mirror Recursion
 

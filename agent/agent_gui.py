@@ -12,6 +12,8 @@ from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
+AGENT_VERSION = "1.1.0"
+
 SPECIAL_KEYS = {
     "Backspace": Key.backspace,
     "Delete": Key.delete,
@@ -39,6 +41,8 @@ class RemoteAgentApp:
 
         self.sio = None
         self.room_id = ""
+        self.last_rgb = None
+        self.last_size = None
         self.mouse = MouseController()
         self.keyboard = KeyboardController()
 
@@ -142,6 +146,7 @@ class RemoteAgentApp:
                     "platform": platform.platform(),
                     "python": sys.version.split()[0],
                     "client": "RDP Agent GUI",
+                    "version": AGENT_VERSION,
                 },
             })
 
@@ -156,7 +161,7 @@ class RemoteAgentApp:
         @self.sio.on("agent:capture-screen")
         def on_capture_screen(data):
             try:
-                frame = self.capture_screen()
+                frame = self.capture_screen(data.get("forceFull", False))
                 frame["roomId"] = self.room_id
                 self.sio.emit("agent:screen", frame)
             except Exception as exc:
@@ -206,12 +211,77 @@ class RemoteAgentApp:
             for mod in reversed(modifiers):
                 self.keyboard.release(mod)
 
-    def capture_screen(self):
+    def changed_region(self, previous, current, width, height):
+        min_x = width
+        min_y = height
+        max_x = -1
+        max_y = -1
+        stride = width * 3
+
+        for y in range(height):
+            row_start = y * stride
+            previous_row = previous[row_start:row_start + stride]
+            current_row = current[row_start:row_start + stride]
+            if previous_row == current_row:
+                continue
+
+            for x in range(width):
+                index = x * 3
+                if previous_row[index:index + 3] != current_row[index:index + 3]:
+                    min_x = min(min_x, x)
+                    max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+
+        if max_x < 0:
+            return None
+        return {"x": min_x, "y": min_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
+
+    def crop_rgb(self, rgb, width, region):
+        stride = width * 3
+        crop_stride = region["width"] * 3
+        rows = []
+        for y in range(region["y"], region["y"] + region["height"]):
+            start = y * stride + region["x"] * 3
+            rows.append(rgb[start:start + crop_stride])
+        return b"".join(rows)
+
+    def capture_screen(self, force_full=False):
         with mss() as sct:
             monitor = sct.monitors[1]
             raw = sct.grab(monitor)
-            data = tools.to_png(raw.rgb, raw.size)
+            current_rgb = raw.rgb
+            current_size = raw.size
+
+        if not force_full and self.last_rgb is not None and self.last_size == current_size:
+            region = self.changed_region(self.last_rgb, current_rgb, raw.width, raw.height)
+            self.last_rgb = current_rgb
+            if region is None:
+                return {
+                    "type": "NO_CHANGE",
+                    "mime": "image/png",
+                    "width": raw.width,
+                    "height": raw.height,
+                    "size": 0,
+                }
+
+            cropped = self.crop_rgb(current_rgb, raw.width, region)
+            data = tools.to_png(cropped, (region["width"], region["height"]))
+            return {
+                "type": "DELTA",
+                "image": base64.b64encode(data).decode("ascii"),
+                "mime": "image/png",
+                "width": raw.width,
+                "height": raw.height,
+                "size": len(data),
+                "region": region,
+            }
+
+        data = tools.to_png(current_rgb, current_size)
+        self.last_rgb = current_rgb
+        self.last_size = current_size
         return {
+            "type": "FULL",
             "image": base64.b64encode(data).decode("ascii"),
             "mime": "image/png",
             "width": raw.width,

@@ -285,6 +285,30 @@ button:hover {
   background-color: #000;
 }
 
+.screen-meta,
+.device-meta {
+  position: absolute;
+  z-index: 4;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: #67e8f9;
+  background: rgba(0, 0, 0, 0.72);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.screen-meta {
+  top: 12px;
+  right: 12px;
+}
+
+.device-meta {
+  right: 12px;
+  bottom: 12px;
+}
+
 #screen:not([src]),
 #screen[src=""] {
   display: none;

@@ -9,6 +9,9 @@ const empty = $('empty');
 const logBox = $('log');
 const screenWrap = document.querySelector('.screen-wrap');
 let fitMode = 'contain';
+let fullCanvas = null;
+let fullCtx = null;
+let hasFrame = false;
 
 function log(message) {
   const line = `[${new Date().toLocaleTimeString()}] ${message}`;
@@ -23,7 +26,8 @@ function requestScreen() {
   if (!socket || !roomId) return;
   socket.emit('controller:request-screen', {
     roomId,
-    quality: Number($('quality').value || 45)
+    quality: Number($('quality').value || 45),
+    forceFull: !hasFrame
   });
 }
 
@@ -72,14 +76,85 @@ $('connectBtn').addEventListener('click', () => {
   socket.on('room:status', (room) => {
     const agent = room.agentSocketId ? 'agent online' : 'agent offline';
     setStatus(`${roomId} - ${agent}`);
+    if (room.device) {
+      $('deviceMeta').textContent = `Device: ${room.device.host || '-'}, Version: ${room.device.version || '-'}`;
+    }
   });
 
-  socket.on('controller:screen', ({ image, mime, width, height, size }) => {
-    screen.src = `data:${mime || 'image/jpeg'};base64,${image}`;
-    empty.style.display = 'none';
-    log(`Screen ${width}x${height}, ${Math.round(size / 1024)} KB`);
+  socket.on('controller:screen', ({ image, mime, width, height, size, type, region }) => {
+    const frameType = type || 'FULL';
+    $('screenMeta').textContent = `Size: ${formatBytes(size || 0)} | Type: ${formatType(frameType)}`;
+
+    if (frameType === 'NO_CHANGE') {
+      log(`Screen ${width || '-'}x${height || '-'}, 0 KB, no change`);
+      return;
+    }
+
+    if (frameType === 'DELTA') {
+      applyDeltaFrame({ image, mime, width, height, size, region });
+      return;
+    }
+
+    applyFullFrame({ image, mime, width, height, size });
   });
 });
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatType(type) {
+  if (type === 'NO_CHANGE') return 'No Change';
+  return type;
+}
+
+function ensureCanvas(width, height) {
+  if (!fullCanvas) {
+    fullCanvas = document.createElement('canvas');
+    fullCtx = fullCanvas.getContext('2d');
+  }
+  if (fullCanvas.width !== width || fullCanvas.height !== height) {
+    fullCanvas.width = width;
+    fullCanvas.height = height;
+  }
+}
+
+function applyFullFrame({ image, mime, width, height, size }) {
+  const img = new Image();
+  img.onload = () => {
+    ensureCanvas(img.naturalWidth, img.naturalHeight);
+    fullCtx.drawImage(img, 0, 0);
+    screen.src = fullCanvas.toDataURL('image/png');
+    empty.style.display = 'none';
+    hasFrame = true;
+    log(`Screen ${width}x${height}, ${formatBytes(size)}, FULL`);
+  };
+  img.src = `data:${mime || 'image/png'};base64,${image}`;
+}
+
+function applyDeltaFrame({ image, mime, width, height, size, region }) {
+  if (!fullCanvas || !fullCtx || !region) {
+    socket.emit('controller:request-screen', { roomId, quality: Number($('quality').value || 45), forceFull: true });
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    fullCtx.drawImage(img, region.x, region.y);
+    screen.src = fullCanvas.toDataURL('image/png');
+    empty.style.display = 'none';
+    hasFrame = true;
+    log(`Screen ${width}x${height}, ${formatBytes(size)}, DELTA ${region.width}x${region.height}`);
+  };
+  img.src = `data:${mime || 'image/png'};base64,${image}`;
+}
 
 $('screenBtn').addEventListener('click', requestScreen);
 $('live').addEventListener('change', (event) => event.target.checked ? startLive() : stopLive());

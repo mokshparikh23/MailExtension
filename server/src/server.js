@@ -73,9 +73,10 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('room:status', room);
   });
 
-  socket.on('controller:request-screen', ({ roomId, quality }) => {
+  socket.on('controller:request-screen', ({ roomId, quality, forceFull }) => {
     socket.to(roomId).emit('agent:capture-screen', {
-      quality: Math.max(10, Math.min(Number(quality || 40), 90))
+      quality: Math.max(10, Math.min(Number(quality || 40), 90)),
+      forceFull: Boolean(forceFull)
     });
   });
 

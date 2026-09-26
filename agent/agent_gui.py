@@ -1,18 +1,24 @@
 import base64
+import io
+import json
+import os
 import platform
 import socket
 import sys
 import threading
+import time
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 import socketio
-from mss import mss, tools
+from mss import mss
+from PIL import Image, ImageChops
 from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
-AGENT_VERSION = "1.1.0"
+AGENT_VERSION = "1.2.0"
 
 SPECIAL_KEYS = {
     "Backspace": Key.backspace,
@@ -33,23 +39,25 @@ SPECIAL_KEYS = {
 
 
 class RemoteAgentApp:
-    def __init__(self, root):
+    def __init__(self, root, startup_config=None):
         self.root = root
         self.root.title("netrem - Remote Control")
         self.root.geometry("420x520")
         self.root.resizable(False, False)
 
         self.sio = None
+        self.connecting = False
+        self.keep_connecting = False
         self.room_id = ""
-        self.last_rgb = None
-        self.last_size = None
+        self.last_image = None
         self.mouse = MouseController()
         self.keyboard = KeyboardController()
 
-        self.server_var = tk.StringVar(value="http://localhost:3000")
-        self.room_var = tk.StringVar(value="test123")
-        self.token_var = tk.StringVar(value="test-secret-123")
-        self.monitor_var = tk.StringVar(value="1")
+        startup_config = startup_config or {}
+        self.server_var = tk.StringVar(value=startup_config.get("server", "http://localhost:3000"))
+        self.room_var = tk.StringVar(value=startup_config.get("room", "test123"))
+        self.token_var = tk.StringVar(value=os.environ.pop("RDP_AGENT_TOKEN", ""))
+        self.monitor_var = tk.StringVar(value=str(startup_config.get("monitor", 1)))
         self.status_var = tk.StringVar(value="Disconnected")
         self.room_status_var = tk.StringVar(value="Not connected")
         self.device_var = tk.StringVar(value=f"Device: {socket.gethostname()}")
@@ -111,15 +119,14 @@ class RemoteAgentApp:
         self.root.after(0, self.room_status_var.set, text)
 
     def connect(self):
-        if self.sio and self.sio.connected:
-            messagebox.showinfo("Already connected", "Agent is already connected.")
+        if self.connecting or (self.sio and self.sio.connected):
+            messagebox.showinfo("Already running", "The agent is connecting or already connected.")
             return
 
         server = self.server_var.get().strip()
         self.room_id = self.room_var.get().strip()
         token = self.token_var.get().strip()
-        self.last_rgb = None
-        self.last_size = None
+        self.last_image = None
 
         if not server or not self.room_id or not token or not self.monitor_var.get().strip():
             messagebox.showerror("Missing fields", "Server URL, Room ID, Access Token, and Monitor number are required.")
@@ -127,19 +134,34 @@ class RemoteAgentApp:
 
         self.set_status("Connecting...")
         self.set_room_status("Connecting...")
+        self.keep_connecting = True
+        self.connecting = True
         thread = threading.Thread(target=self.connect_worker, args=(server, token), daemon=True)
         thread.start()
 
     def connect_worker(self, server, token):
-        self.sio = socketio.Client(reconnection=True)
-        self.register_socket_handlers()
         try:
-            self.sio.connect(server, auth={"token": token}, transports=["websocket", "polling"])
-            self.sio.wait()
-        except Exception as exc:
-            self.set_status(f"Connection failed: {exc}")
+            while self.keep_connecting:
+                self.sio = socketio.Client(reconnection=True)
+                self.register_socket_handlers()
+                try:
+                    self.sio.connect(server, auth={"token": token}, transports=["websocket", "polling"])
+                    self.sio.wait()
+                except Exception as exc:
+                    self.set_status(f"Connection failed: {exc}. Retrying...")
+                    self.set_room_status("Waiting for relay")
+                finally:
+                    self.sio.disconnect()
+
+                for _ in range(10):
+                    if not self.keep_connecting:
+                        break
+                    time.sleep(1)
+        finally:
+            self.connecting = False
 
     def disconnect(self):
+        self.keep_connecting = False
         if self.sio:
             self.sio.disconnect()
         self.set_status("Disconnected")
@@ -163,8 +185,12 @@ class RemoteAgentApp:
 
         @self.sio.event
         def disconnect():
-            self.set_status("Disconnected")
-            self.set_room_status("Reconnecting...")
+            if self.keep_connecting:
+                self.set_status("Reconnecting...")
+                self.set_room_status("Reconnecting...")
+            else:
+                self.set_status("Disconnected")
+                self.set_room_status("Not connected")
 
         @self.sio.event
         def connect_error(data):
@@ -173,7 +199,7 @@ class RemoteAgentApp:
         @self.sio.on("agent:capture-screen")
         def on_capture_screen(data):
             try:
-                frame = self.capture_screen(data.get("forceFull", False))
+                frame = self.capture_screen(data.get("forceFull", False), data.get("quality", 45))
                 frame["roomId"] = self.room_id
                 self.sio.emit("agent:screen", frame)
             except Exception as exc:
@@ -192,6 +218,8 @@ class RemoteAgentApp:
 
         @self.sio.on("agent:mouse-click")
         def on_mouse_click(data):
+            if "x" in data and "y" in data:
+                on_mouse_move(data)
             button = Button.right if data.get("button") == "right" else Button.left
             self.mouse.click(button, 1)
 
@@ -223,83 +251,37 @@ class RemoteAgentApp:
             for mod in reversed(modifiers):
                 self.keyboard.release(mod)
 
-    def changed_region(self, previous, current, width, height):
-        min_x = width
-        min_y = height
-        max_x = -1
-        max_y = -1
-        stride = width * 3
+    def encode_frame(self, image, quality):
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=max(10, min(int(quality), 90)))
+        data = output.getvalue()
+        return {"image": base64.b64encode(data).decode("ascii"), "mime": "image/jpeg", "size": len(data)}
 
-        for y in range(height):
-            row_start = y * stride
-            previous_row = previous[row_start:row_start + stride]
-            current_row = current[row_start:row_start + stride]
-            if previous_row == current_row:
-                continue
-
-            for x in range(width):
-                index = x * 3
-                if previous_row[index:index + 3] != current_row[index:index + 3]:
-                    min_x = min(min_x, x)
-                    max_x = max(max_x, x)
-            min_y = min(min_y, y)
-            max_y = max(max_y, y)
-
-        if max_x < 0:
-            return None
-        return {"x": min_x, "y": min_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
-
-    def crop_rgb(self, rgb, width, region):
-        stride = width * 3
-        crop_stride = region["width"] * 3
-        rows = []
-        for y in range(region["y"], region["y"] + region["height"]):
-            start = y * stride + region["x"] * 3
-            rows.append(rgb[start:start + crop_stride])
-        return b"".join(rows)
-
-    def capture_screen(self, force_full=False):
+    def capture_screen(self, force_full=False, quality=45):
         with mss() as sct:
             monitor = self.selected_monitor(sct)
             raw = sct.grab(monitor)
-            current_rgb = raw.rgb
-            current_size = raw.size
+        image = Image.frombytes("RGB", raw.size, raw.rgb)
+        if image.width > 1600:
+            image.thumbnail((1600, image.height), Image.Resampling.LANCZOS)
 
-        if not force_full and self.last_rgb is not None and self.last_size == current_size:
-            region = self.changed_region(self.last_rgb, current_rgb, raw.width, raw.height)
-            self.last_rgb = current_rgb
-            if region is None:
-                return {
-                    "type": "NO_CHANGE",
-                    "mime": "image/png",
-                    "width": raw.width,
-                    "height": raw.height,
-                    "size": 0,
-                }
+        if not force_full and self.last_image is not None and self.last_image.size == image.size:
+            box = ImageChops.difference(self.last_image, image).getbbox()
+            self.last_image = image
+            if box is None:
+                return {"type": "NO_CHANGE", "width": image.width, "height": image.height, "size": 0}
+            x1, y1, x2, y2 = box
+            frame = self.encode_frame(image.crop(box), quality)
+            frame.update({
+                "type": "DELTA", "width": image.width, "height": image.height,
+                "region": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
+            })
+            return frame
 
-            cropped = self.crop_rgb(current_rgb, raw.width, region)
-            data = tools.to_png(cropped, (region["width"], region["height"]))
-            return {
-                "type": "DELTA",
-                "image": base64.b64encode(data).decode("ascii"),
-                "mime": "image/png",
-                "width": raw.width,
-                "height": raw.height,
-                "size": len(data),
-                "region": region,
-            }
-
-        data = tools.to_png(current_rgb, current_size)
-        self.last_rgb = current_rgb
-        self.last_size = current_size
-        return {
-            "type": "FULL",
-            "image": base64.b64encode(data).decode("ascii"),
-            "mime": "image/png",
-            "width": raw.width,
-            "height": raw.height,
-            "size": len(data),
-        }
+        self.last_image = image
+        frame = self.encode_frame(image, quality)
+        frame.update({"type": "FULL", "width": image.width, "height": image.height})
+        return frame
 
     def selected_monitor(self, sct):
         try:
@@ -319,6 +301,17 @@ class RemoteAgentApp:
 
 
 if __name__ == "__main__":
+    auto_connect = "--autoconnect" in sys.argv
+    config = {}
+    if auto_connect:
+        config_file = Path(os.environ["APPDATA"]) / "RDPAgent" / "config.json"
+        try:
+            config = json.loads(config_file.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Could not read auto-start settings: {exc}") from exc
+
     root = tk.Tk()
-    app = RemoteAgentApp(root)
+    app = RemoteAgentApp(root, config)
+    if auto_connect:
+        root.after(500, app.connect)
     root.mainloop()

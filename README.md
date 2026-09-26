@@ -113,6 +113,36 @@ own screen to click **Allow capture**.
 Windows 10 version 2004 or later is needed for `WDA_EXCLUDEFROMCAPTURE`. The
 result in a given capture tool may be a blank area or the window disappearing.
 
+## Start the Windows Agent Automatically
+
+On Laptop B, stop any manually running agent, then open PowerShell in the
+updated `agent/` folder and run this once:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_autostart.ps1 -Server "http://<laptop-a-ip>:3000" -Room "test123"
+```
+
+Enter the relay access token when prompted. The script installs Python
+dependencies and a per-user Windows Scheduled Task. After each Windows sign-in,
+the task opens the visible agent GUI without a CMD window and connects it to the
+relay. The agent retries if the relay is temporarily unavailable. To start it
+immediately after installation, run:
+
+```powershell
+Start-ScheduledTask -TaskName "RDP Agent (interactive)"
+```
+
+You can disconnect or close the agent window on Laptop B at any time. To remove
+auto-start, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall_autostart.ps1`
+from the agent folder. The token is
+stored for the current Windows user with Windows DPAPI, while server, room, and
+monitor settings are stored under `%APPDATA%\RDPAgent`.
+
+This starts after **sign-in**, because desktop capture and mouse control need
+the interactive Windows session. Laptop A's relay must also be running and
+reachable. Windows lock and UAC secure desktop screens remain unavailable to the
+agent.
+
 ## Build Desktop Agent
 
 macOS:

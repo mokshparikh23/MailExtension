@@ -623,6 +623,38 @@ body {
   gap: 12px;
 }
 
+.compact-heading {
+  padding: 0;
+  border: 0;
+}
+
+.audit-list {
+  max-height: 170px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.audit-row,
+.audit-empty {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(9, 13, 20, 0.46);
+}
+
+.audit-row strong,
+.audit-row span {
+  display: block;
+}
+
+.audit-row span,
+.audit-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .panel-heading strong {
   font-size: 18px;
 }

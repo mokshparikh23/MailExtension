@@ -3,6 +3,7 @@ import base64
 import ctypes
 import io
 import platform
+import random
 import socket
 import sys
 import time
@@ -14,7 +15,7 @@ from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.4.0"
 SPECIAL_KEYS = {
     "Backspace": Key.backspace,
     "Delete": Key.delete,
@@ -47,7 +48,13 @@ def parse_args():
 args = parse_args()
 mouse = MouseController()
 keyboard = KeyboardController()
-sio = socketio.Client(reconnection=True)
+sio = socketio.Client(
+    reconnection=True,
+    reconnection_attempts=0,
+    reconnection_delay=1,
+    reconnection_delay_max=30,
+    randomization_factor=0.5,
+)
 monitor_geometry = None
 last_image = None
 
@@ -248,9 +255,17 @@ def on_key(data):
 
 def main():
     print_consent_notice()
-    sio.connect(args.server, auth={"token": args.token}, transports=["websocket", "polling"])
-    while True:
-        time.sleep(1)
+    backoff = 1
+    while not sio.connected:
+        try:
+            sio.connect(args.server, auth={"token": args.token}, transports=["websocket", "polling"])
+            break
+        except Exception as exc:
+            sleep_for = min(backoff, 30) + random.uniform(0, min(backoff, 30) * 0.5)
+            print(f"Initial connect failed: {exc}. Retrying in {sleep_for:.1f}s.")
+            time.sleep(sleep_for)
+            backoff = min(backoff * 2, 30)
+    sio.wait()
 
 
 if __name__ == "__main__":

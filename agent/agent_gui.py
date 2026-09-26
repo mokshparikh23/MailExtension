@@ -4,6 +4,7 @@ import io
 import json
 import os
 import platform
+import random
 import socket
 import sys
 import threading
@@ -20,7 +21,7 @@ from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
-AGENT_VERSION = "1.3.0"
+AGENT_VERSION = "1.4.0"
 _single_instance_handle = None
 
 
@@ -56,7 +57,7 @@ SPECIAL_KEYS = {
     "Home": Key.home,
     "End": Key.end,
     "PageUp": Key.page_up,
-    "PageDown": Key.down,
+    "PageDown": Key.page_down,
     " ": Key.space,
 }
 
@@ -85,6 +86,7 @@ class RemoteAgentApp:
         self.status_var = tk.StringVar(value="Disconnected")
         self.room_status_var = tk.StringVar(value="Not connected")
         self.device_var = tk.StringVar(value=f"Device: {socket.gethostname()}")
+        self.viewer_var = tk.StringVar(value="")
 
         self.build_ui()
 
@@ -99,6 +101,7 @@ class RemoteAgentApp:
         style.configure("Title.TLabel", background="#f4f7fb", foreground="#1665c1", font=("Arial", 24, "bold"))
         style.configure("Version.TLabel", background="#f4f7fb", foreground="#9aa5b5", font=("Arial", 9, "bold"))
         style.configure("Status.TLabel", background="#ffffff", foreground="#23996b", font=("Arial", 12, "bold"))
+        style.configure("Viewer.TLabel", background="#ffffff", foreground="#b45309", font=("Arial", 10, "bold"))
         style.configure("TButton", font=("Arial", 12, "bold"), padding=10)
         style.configure("TEntry", fieldbackground="#ffffff", foreground="#111827", padding=8)
 
@@ -112,6 +115,7 @@ class RemoteAgentApp:
         status_card.pack(fill="x", pady=(0, 16))
         ttk.Label(status_card, textvariable=self.room_status_var, style="Status.TLabel").pack(anchor="center")
         ttk.Label(status_card, textvariable=self.device_var, style="Muted.TLabel").pack(anchor="center", pady=(6, 0))
+        ttk.Label(status_card, textvariable=self.viewer_var, style="Viewer.TLabel").pack(anchor="center", pady=(8, 0))
 
         self.add_field(frame, "Server URL", self.server_var)
         self.add_field(frame, "Room ID", self.room_var)
@@ -126,7 +130,7 @@ class RemoteAgentApp:
         ttk.Label(frame, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="center")
 
         notice = (
-            "Visible lab agent: shares this device screen and accepts remote input commands for authorized testing."
+            "Visible lab agent: shares this device screen and accepts remote input commands for authorized testing. Connection events, including IP address, are audit logged."
         )
         ttk.Label(frame, text=notice, style="Muted.TLabel", wraplength=360, justify="center").pack(anchor="center", pady=(14, 0))
 
@@ -165,24 +169,34 @@ class RemoteAgentApp:
 
     def connect_worker(self, server, token):
         try:
-            while self.keep_connecting:
-                self.sio = socketio.Client(reconnection=True)
-                self.register_socket_handlers()
+            self.sio = socketio.Client(
+                reconnection=True,
+                reconnection_attempts=0,
+                reconnection_delay=1,
+                reconnection_delay_max=30,
+                randomization_factor=0.5,
+            )
+            self.register_socket_handlers()
+            backoff = 1
+            while self.keep_connecting and not self.sio.connected:
                 try:
                     self.sio.connect(server, auth={"token": token}, transports=["websocket", "polling"])
-                    self.sio.wait()
+                    break
                 except Exception as exc:
-                    self.set_status(f"Connection failed: {exc}. Retrying...")
+                    sleep_for = min(backoff, 30) + random.uniform(0, min(backoff, 30) * 0.5)
+                    self.set_status(f"Connection failed: {exc}. Retry in {sleep_for:.1f}s")
                     self.set_room_status("Waiting for relay")
-                finally:
-                    self.sio.disconnect()
-
-                for _ in range(10):
-                    if not self.keep_connecting:
-                        break
-                    time.sleep(1)
+                    self.interruptible_sleep(sleep_for)
+                    backoff = min(backoff * 2, 30)
+            if self.keep_connecting and self.sio.connected:
+                self.sio.wait()
         finally:
             self.connecting = False
+
+    def interruptible_sleep(self, seconds):
+        end = time.time() + seconds
+        while self.keep_connecting and time.time() < end:
+            time.sleep(0.2)
 
     def disconnect(self):
         self.keep_connecting = False
@@ -190,6 +204,7 @@ class RemoteAgentApp:
             self.sio.disconnect()
         self.set_status("Disconnected")
         self.set_room_status("Not connected")
+        self.viewer_var.set("")
 
     def register_socket_handlers(self):
         @self.sio.event
@@ -219,6 +234,12 @@ class RemoteAgentApp:
         @self.sio.event
         def connect_error(data):
             self.set_status(f"Connection error: {data}")
+
+        @self.sio.on("room:status")
+        def on_room_status(data):
+            count = int((data or {}).get("controllerCount") or 0)
+            text = "An operator is viewing this screen" if count > 0 else ""
+            self.root.after(0, self.viewer_var.set, text)
 
         @self.sio.on("agent:capture-screen")
         def on_capture_screen(data):

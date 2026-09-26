@@ -5,18 +5,22 @@ This is a consent-based internal remote-control MVP for agency lab testing and s
 - `server/`: Node.js + Express + Socket.IO relay and browser controller.
 - `agent/`: Python device agent and compact GUI agent for the device being shared.
 
-The design intentionally requires an explicit room ID and shared token. The agent prints a visible notice and can be stopped with `Ctrl+C`.
+The design intentionally requires an explicit room ID and visible agent. The agent prints/shows a notice and can be stopped by the device user.
 
 ## What It Includes
 
 - Browser controller with room pairing.
 - Compact `netrem`-style desktop agent UI.
 - Socket.IO relay.
+- Separate controller and agent tokens.
 - Mouse click, scroll, and keyboard forwarding.
 - Live screenshot sharing.
 - `FULL`, `DELTA`, and `No Change` frame types.
 - Device name, agent version, screenshot size, and frame type overlays.
 - Monitor selection to avoid mirror-recursion during local testing.
+- Offline geo/audit logging via `geoip-lite`.
+- Bounded reconnect backoff for agent startup.
+- Light/dark operator console.
 - macOS and Windows packaging scripts.
 
 ## Local Run
@@ -26,7 +30,7 @@ Terminal 1:
 ```bash
 cd server
 npm install
-ACCESS_TOKEN="replace-with-a-long-random-token" npm start
+ACCESS_TOKEN="controller-secret" AGENT_TOKEN="agent-secret" npm start
 ```
 
 Open:
@@ -42,7 +46,7 @@ cd agent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python agent.py --server http://localhost:3000 --room test123 --token replace-with-a-long-random-token
+python agent.py --server http://localhost:3000 --room test123 --token agent-secret
 ```
 
 Or run the GUI agent:
@@ -57,14 +61,14 @@ In the GUI, enter:
 
 - Server URL: `http://localhost:3000`
 - Room ID: `test123`
-- Access Token: `replace-with-a-long-random-token`
+- Access Token: `agent-secret`
 - Monitor number: `1`
 
 Then click `Connect`. The browser controller should show the agent as online.
 
 In the browser controller:
 
-- Server token: `replace-with-a-long-random-token`
+- Server token: `controller-secret`
 - Room ID: `test123`
 - Open **Settings** and click **Connect**. The settings panel closes so the remote screen fills the page.
 - Live share and mouse control start enabled. Use **Fullscreen** for the largest view.
@@ -208,7 +212,7 @@ The packaged app is a visible lab agent. It is not hidden and does not include s
 1. Deploy or run the `server/` relay.
 2. Open the browser controller from your operator machine.
 3. Start `netrem` agent on the authorized lab/MSB test machine.
-4. Use the same room ID and access token on both sides.
+4. Use the same room ID on both sides. Use the controller token in the browser and the agent token in the device app.
 5. In your MSB, observe whether it detects:
    - screen capture activity
    - accessibility/input-control permission
@@ -231,7 +235,7 @@ Recommended simple deployment:
 ```bash
 cd /opt/internal-remote-control
 npm ci --omit=dev
-ACCESS_TOKEN="use-a-long-random-secret" PORT=3000 npm start
+ACCESS_TOKEN="controller-secret" AGENT_TOKEN="agent-secret" AUDIT_LOG_PATH="/app/data/audit.jsonl" PORT=3000 npm start
 ```
 
 For production, run the server with `pm2` or `systemd`, and put Nginx in front with TLS.
@@ -257,8 +261,10 @@ server {
 Then run the agent with:
 
 ```bash
-python agent.py --server https://remote.yourdomain.com --room test123 --token use-a-long-random-secret
+python agent.py --server https://remote.yourdomain.com --room test123 --token agent-secret
 ```
+
+Audit events are stored as JSONL at `data/audit.jsonl` by default, or at `AUDIT_LOG_PATH` when set. The browser audit panel reads `/api/audit` with the controller token.
 
 ## Security Notes
 

@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
 const { sendMagicPacket } = require('./wake');
 const { loadRegistry, saveRegistry } = require('./registry');
+const { clientIp, record, readRecent } = require('./audit');
 
 const PORT = Number(process.env.PORT || 3000);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'change-me-before-deploy';
@@ -28,6 +29,7 @@ const io = new Server(server, {
 app.use(helmet({
   contentSecurityPolicy: false
 }));
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -100,6 +102,8 @@ function sendToAgent(roomId, event, payload) {
 io.use(authorize);
 
 io.on('connection', (socket) => {
+  socket.data.ip = clientIp(socket.handshake);
+
   socket.on('controller:join', ({ roomId } = {}) => {
     if (!isValidRoomId(roomId) || socket.data.role || !socket.data.scopes.includes('controller')) return;
     const room = getRoom(roomId);
@@ -107,6 +111,7 @@ io.on('connection', (socket) => {
     socket.data.role = 'controller';
     socket.data.roomId = roomId;
     socket.join(roomId);
+    record({ kind: 'connect', role: 'controller', roomId, ip: socket.data.ip });
     socket.emit('room:status', room);
     if (room.controlAccessibility !== null) {
       socket.emit('controller:control-status', { accessibility: room.controlAccessibility });
@@ -124,6 +129,7 @@ io.on('connection', (socket) => {
     socket.data.role = 'agent';
     socket.data.roomId = roomId;
     socket.join(roomId);
+    record({ kind: 'connect', role: 'agent', roomId, ip: socket.data.ip, device: room.device });
     io.to(roomId).emit('room:status', room);
     scheduleDeviceSave();
   });
@@ -190,6 +196,7 @@ io.on('connection', (socket) => {
     if (role === 'controller') room.controllerCount = Math.max(0, room.controllerCount - 1);
     if (role === 'agent' && room.agentSocketId === socket.id) room.agentSocketId = null;
     if (role === 'agent' && room.agentSocketId === null) room.controlAccessibility = null;
+    record({ kind: 'disconnect', role, roomId, ip: socket.data.ip, device: role === 'agent' ? room.device : undefined });
     io.to(roomId).emit('room:status', room);
     if (role === 'agent') scheduleDeviceSave();
   });
@@ -258,6 +265,14 @@ app.post('/api/wake', async (req, res) => {
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size });
+});
+
+app.get('/api/audit', (req, res) => {
+  if (req.get('authorization') !== `Bearer ${ACCESS_TOKEN}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  res.json({ events: readRecent(req.query.limit) });
 });
 
 server.listen(PORT, () => {

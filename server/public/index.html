@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Internal Remote Control</title>
+    <title>Netrom</title>
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -13,7 +13,7 @@
         <div class="brand">
           <div class="mark">IR</div>
           <div>
-            <h1>Internal Remote Control</h1>
+            <h1>Netrom</h1>
             <p id="streamInfo">Connect a device to start viewing</p>
           </div>
         </div>
@@ -105,6 +105,14 @@
               <span></span>
               <b>Enable keyboard</b>
             </label>
+          </div>
+
+          <div class="panel-section">
+            <div class="panel-heading compact-heading">
+              <span class="eyebrow">Audit</span>
+              <button id="auditBtn" class="ghost" type="button">Refresh</button>
+            </div>
+            <div id="auditList" class="audit-list"></div>
           </div>
 
           <div class="panel-section grow">

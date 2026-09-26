@@ -84,6 +84,35 @@ async function loadDevices(reset = false) {
   }
 }
 
+async function loadAudit() {
+  const token = $('token').value.trim();
+  if (!token) {
+    log('Enter the server token before loading audit events.');
+    return;
+  }
+  try {
+    const response = await fetch('/api/audit?limit=50', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const rows = result.events || [];
+    $('auditList').innerHTML = rows.length ? rows.map(renderAuditRow).join('') :
+      '<div class="audit-empty">No audit events yet.</div>';
+  } catch (error) {
+    $('auditList').innerHTML = `<div class="audit-empty">Audit unavailable: ${error.message}</div>`;
+  }
+}
+
+function renderAuditRow(event) {
+  const when = new Date(event.ts).toLocaleTimeString();
+  const place = event.geo ? [event.geo.city, event.geo.country].filter(Boolean).join(', ') : 'private/LAN';
+  return `<div class="audit-row">
+    <strong>${event.kind || '-'} / ${event.role || '-'}</strong>
+    <span>${when} · ${event.roomId || '-'} · ${event.ip || '-'} · ${place}</span>
+  </div>`;
+}
+
 function requestScreen() {
   if (!socket?.connected || !roomId) return;
   framePending = true;
@@ -145,6 +174,7 @@ $('connectBtn').addEventListener('click', () => {
     socket.emit('controller:join', { roomId });
     log(`Joined room ${roomId} as controller.`);
     showSettings(false);
+    loadAudit();
     if ($('live').checked) startLive();
   });
 
@@ -254,6 +284,7 @@ function applyDeltaFrame({ image, mime, width, height, size, region }) {
 
 $('screenBtn').addEventListener('click', requestScreen);
 $('refreshDevicesBtn').addEventListener('click', () => loadDevices(true));
+$('auditBtn').addEventListener('click', loadAudit);
 $('loadMoreDevicesBtn').addEventListener('click', () => loadDevices(false));
 $('deviceSearch').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {

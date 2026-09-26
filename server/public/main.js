@@ -214,6 +214,31 @@ function applyDeltaFrame({ image, mime, width, height, size, region }) {
 }
 
 $('screenBtn').addEventListener('click', requestScreen);
+$('wakeBtn').addEventListener('click', async () => {
+  const token = $('token').value.trim();
+  if (!token) {
+    log('Enter the server token in Settings before sending a wake signal.');
+    showSettings(true);
+    return;
+  }
+
+  const button = $('wakeBtn');
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  try {
+    const response = await fetch('/api/wake', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const result = await response.json();
+    log(result.message || result.error || 'Wake request completed.');
+  } catch (error) {
+    log(`Wake request failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Wake Laptop B';
+  }
+});
 $('live').addEventListener('change', (event) => event.target.checked ? startLive() : stopLive());
 $('interval').addEventListener('change', () => {
   if ($('live').checked && socket?.connected) startLive();

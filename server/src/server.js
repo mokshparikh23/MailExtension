@@ -4,9 +4,14 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
+const { sendMagicPacket } = require('./wake');
 
 const PORT = Number(process.env.PORT || 3000);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'change-me-before-deploy';
+const WAKE_MAC = process.env.WAKE_MAC || '';
+const WAKE_BROADCAST = process.env.WAKE_BROADCAST || '255.255.255.255';
+const WAKE_PORT = Number(process.env.WAKE_PORT || 9);
+let lastWakeAt = 0;
 
 const app = express();
 const server = http.createServer(app);
@@ -144,6 +149,30 @@ app.post('/api/room', (req, res) => {
   const roomId = randomUUID().slice(0, 8);
   getRoom(roomId);
   res.json({ roomId });
+});
+
+app.post('/api/wake', async (req, res) => {
+  if (req.get('authorization') !== `Bearer ${ACCESS_TOKEN}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  if (!WAKE_MAC) {
+    res.status(503).json({ error: 'Wake-on-LAN is not configured on the relay.' });
+    return;
+  }
+  if (Date.now() - lastWakeAt < 5000) {
+    res.status(429).json({ error: 'Wait five seconds before sending another wake signal.' });
+    return;
+  }
+
+  try {
+    await sendMagicPacket({ mac: WAKE_MAC, broadcast: WAKE_BROADCAST, port: WAKE_PORT });
+    lastWakeAt = Date.now();
+    res.json({ ok: true, message: 'Wake signal sent. Waiting for the agent to reconnect.' });
+  } catch (error) {
+    console.error('Wake-on-LAN failed:', error);
+    res.status(500).json({ error: 'Wake signal could not be sent. Check the relay configuration.' });
+  }
 });
 
 app.get('/health', (_req, res) => {

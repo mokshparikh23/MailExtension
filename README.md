@@ -143,6 +143,43 @@ the interactive Windows session. Laptop A's relay must also be running and
 reachable. Windows lock and UAC secure desktop screens remain unavailable to the
 agent.
 
+## Wake Laptop B from Sleep
+
+While Laptop B is asleep, its agent and any Windows service are paused. The
+browser controller can send a Wake-on-LAN magic packet from Laptop A if Laptop
+B's network adapter and firmware support it. On Laptop B, find the MAC address
+of the adapter that stays connected during sleep:
+
+```powershell
+Get-NetAdapter | Select-Object Name, Status, MacAddress
+Get-NetAdapterPowerManagement -Name "Ethernet"
+powercfg /a
+```
+
+Replace `Ethernet` with the actual adapter name if needed. Ethernet is the
+easiest path to test; Wi-Fi wake depends on the laptop and driver. If the
+adapter supports it but `WakeOnMagicPacket` is disabled, enable that setting in
+the adapter's Power Management properties or with an elevated PowerShell:
+
+```powershell
+Set-NetAdapterPowerManagement -Name "Ethernet" -WakeOnMagicPacket Enabled
+```
+
+Restart the relay on Laptop A with Laptop B's MAC and your LAN broadcast
+address. Laptop A currently reports `192.168.0.255` as its LAN broadcast:
+
+```bash
+cd server
+WAKE_MAC="AA-BB-CC-DD-EE-FF" WAKE_BROADCAST="192.168.0.255" ACCESS_TOKEN="your-token" PORT=3100 npm start
+```
+
+Enter the token in the controller's Settings, then click **Wake Laptop B**.
+The button reports when the packet was sent; the agent coming online confirms
+that Laptop B actually woke and reconnected. Laptop A and B should be on the
+same LAN, or the network must forward the wake packet. Laptop A must stay
+awake. Windows may show its lock screen after waking; the agent cannot unlock
+that secure screen through this browser viewer.
+
 ## Build Desktop Agent
 
 macOS:

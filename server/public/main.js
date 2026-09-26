@@ -33,6 +33,36 @@ function showSettings(show) {
   $('settingsBtn').setAttribute('aria-expanded', String(show));
 }
 
+async function refreshDevices() {
+  const token = $('token').value.trim();
+  if (!token) {
+    log('Enter the server token before loading devices.');
+    return;
+  }
+  try {
+    const response = await fetch('/api/agents', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const list = $('deviceList');
+    list.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = result.agents.length ? 'Select a device' : 'No devices yet';
+    list.append(placeholder);
+    for (const agent of result.agents) {
+      const option = document.createElement('option');
+      option.value = agent.roomId;
+      option.textContent = `${agent.online ? '●' : '○'} ${agent.device?.host || agent.roomId} (${agent.roomId})`;
+      list.append(option);
+    }
+    log(`${result.agents.length} lab room(s) loaded.`);
+  } catch (error) {
+    log(`Device list failed: ${error.message}`);
+  }
+}
+
 function requestScreen() {
   if (!socket?.connected || !roomId) return;
   framePending = true;
@@ -214,6 +244,10 @@ function applyDeltaFrame({ image, mime, width, height, size, region }) {
 }
 
 $('screenBtn').addEventListener('click', requestScreen);
+$('refreshDevicesBtn').addEventListener('click', refreshDevices);
+$('deviceList').addEventListener('change', () => {
+  if ($('deviceList').value) $('roomId').value = $('deviceList').value;
+});
 $('wakeBtn').addEventListener('click', async () => {
   const token = $('token').value.trim();
   if (!token) {

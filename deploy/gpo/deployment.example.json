@@ -1,0 +1,6 @@
+{
+  "server": "https://remote.averisglobalsolution.com",
+  "agentToken": "REPLACE_WITH_AGENT_TOKEN",
+  "roomPrefix": "lab",
+  "monitor": 1
+}

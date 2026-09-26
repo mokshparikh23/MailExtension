@@ -17,7 +17,8 @@ set -euo pipefail
 
 DOMAIN="${DOMAIN:?set DOMAIN, e.g. remote.yourdomain.com}"
 ACCESS_TOKEN="${ACCESS_TOKEN:?set a long random ACCESS_TOKEN (e.g. openssl rand -hex 32)}"
-EMAIL="${EMAIL:?set EMAIL for Let's Encrypt notices}"
+AGENT_TOKEN="${AGENT_TOKEN:-$ACCESS_TOKEN}"
+EMAIL="${EMAIL:?set EMAIL for Lets Encrypt notices}"
 APP_DIR="${APP_DIR:-/opt/internal-remote-control}"
 
 echo ">> Installing Node.js 20, Nginx, certbot"
@@ -32,6 +33,7 @@ echo ">> Writing environment file"
 cat > "$APP_DIR/server/.env" <<EOF
 PORT=3000
 ACCESS_TOKEN=$ACCESS_TOKEN
+AGENT_TOKEN=$AGENT_TOKEN
 CORS_ORIGIN=https://$DOMAIN
 EOF
 chmod 600 "$APP_DIR/server/.env"
@@ -55,5 +57,5 @@ certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirec
 echo ""
 echo ">> Done. Controller UI:  https://$DOMAIN"
 echo ">> Health check:         curl https://$DOMAIN/health"
-echo ">> Point the agent at:   --server https://$DOMAIN --token <ACCESS_TOKEN>"
+echo ">> Point the agent at:   --server https://$DOMAIN --token <AGENT_TOKEN>"
 echo ">> Service logs:         journalctl -u irc -f"

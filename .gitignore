@@ -4,3 +4,5 @@ agent/__pycache__/
 *.pyc
 .DS_Store
 .env
+deploy/gpo/deployment.json
+deploy/gpo/netrem.exe

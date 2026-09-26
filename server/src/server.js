@@ -8,6 +8,7 @@ const { sendMagicPacket } = require('./wake');
 
 const PORT = Number(process.env.PORT || 3000);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'change-me-before-deploy';
+const AGENT_TOKEN = process.env.AGENT_TOKEN || ACCESS_TOKEN;
 const WAKE_MAC = process.env.WAKE_MAC || '';
 const WAKE_BROADCAST = process.env.WAKE_BROADCAST || '255.255.255.255';
 const WAKE_PORT = Number(process.env.WAKE_PORT || 9);
@@ -46,18 +47,31 @@ function getRoom(roomId) {
 
 function authorize(socket, next) {
   const token = socket.handshake.auth && socket.handshake.auth.token;
-  if (token !== ACCESS_TOKEN) {
+  const scopes = [];
+  if (token === ACCESS_TOKEN) scopes.push('controller');
+  if (token === AGENT_TOKEN) scopes.push('agent');
+  if (scopes.length === 0) {
     next(new Error('unauthorized'));
     return;
   }
+  socket.data.scopes = scopes;
   next();
+}
+
+function isJoined(socket, role, roomId) {
+  return socket.data.role === role && socket.data.roomId === roomId;
+}
+
+function sendToAgent(roomId, event, payload) {
+  const agentSocketId = rooms.get(roomId)?.agentSocketId;
+  if (agentSocketId) io.to(agentSocketId).emit(event, payload);
 }
 
 io.use(authorize);
 
 io.on('connection', (socket) => {
-  socket.on('controller:join', ({ roomId }) => {
-    if (!roomId) return;
+  socket.on('controller:join', ({ roomId } = {}) => {
+    if (!roomId || socket.data.role || !socket.data.scopes.includes('controller')) return;
     const room = getRoom(roomId);
     room.controllerCount += 1;
     socket.data.role = 'controller';
@@ -70,8 +84,8 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('room:status', room);
   });
 
-  socket.on('agent:join', ({ roomId, device }) => {
-    if (!roomId) return;
+  socket.on('agent:join', ({ roomId, device } = {}) => {
+    if (!roomId || socket.data.role || !socket.data.scopes.includes('agent')) return;
     const room = getRoom(roomId);
     room.agentSocketId = socket.id;
     room.controlAccessibility = null;
@@ -84,49 +98,58 @@ io.on('connection', (socket) => {
   });
 
   socket.on('controller:request-screen', ({ roomId, quality, forceFull }) => {
-    socket.to(roomId).emit('agent:capture-screen', {
+    if (!isJoined(socket, 'controller', roomId)) return;
+    sendToAgent(roomId, 'agent:capture-screen', {
       quality: Math.max(10, Math.min(Number(quality || 40), 90)),
       forceFull: Boolean(forceFull)
     });
   });
 
   socket.on('agent:screen', ({ roomId, image, mime, width, height, size, type, region }) => {
+    if (!isJoined(socket, 'agent', roomId)) return;
     const room = getRoom(roomId);
+    if (room.agentSocketId !== socket.id) return;
     room.lastSeenAt = Date.now();
     socket.to(roomId).emit('controller:screen', { image, mime, width, height, size, type, region });
     io.to(roomId).emit('room:status', room);
   });
 
   socket.on('agent:control-status', ({ roomId, accessibility }) => {
-    if (socket.data.role !== 'agent' || socket.data.roomId !== roomId) return;
+    if (!isJoined(socket, 'agent', roomId)) return;
+    if (getRoom(roomId).agentSocketId !== socket.id) return;
     getRoom(roomId).controlAccessibility = accessibility;
     socket.to(roomId).emit('controller:control-status', { accessibility });
   });
 
   socket.on('agent:control-result', ({ roomId, action, error }) => {
-    if (socket.data.role !== 'agent' || socket.data.roomId !== roomId) return;
+    if (!isJoined(socket, 'agent', roomId)) return;
+    if (getRoom(roomId).agentSocketId !== socket.id) return;
     socket.to(roomId).emit('controller:control-result', { action, error });
   });
 
   socket.on('controller:mouse-move', ({ roomId, x, y, screenSize }) => {
-    socket.to(roomId).emit('agent:mouse-move', { x, y, screenSize });
+    if (!isJoined(socket, 'controller', roomId)) return;
+    sendToAgent(roomId, 'agent:mouse-move', { x, y, screenSize });
   });
 
   socket.on('controller:mouse-click', ({ roomId, button, x, y, screenSize }) => {
+    if (!isJoined(socket, 'controller', roomId)) return;
     // Older agents move and click through separate handlers. Socket.IO keeps
     // these events in order; updated agents can also use the click coordinates.
     if (Number.isFinite(x) && Number.isFinite(y) && screenSize) {
-      socket.to(roomId).emit('agent:mouse-move', { x, y, screenSize });
+      sendToAgent(roomId, 'agent:mouse-move', { x, y, screenSize });
     }
-    socket.to(roomId).emit('agent:mouse-click', { button, x, y, screenSize });
+    sendToAgent(roomId, 'agent:mouse-click', { button, x, y, screenSize });
   });
 
   socket.on('controller:mouse-scroll', ({ roomId, deltaY }) => {
-    socket.to(roomId).emit('agent:mouse-scroll', { deltaY });
+    if (!isJoined(socket, 'controller', roomId)) return;
+    sendToAgent(roomId, 'agent:mouse-scroll', { deltaY });
   });
 
   socket.on('controller:key', ({ roomId, key, ctrlKey, altKey, shiftKey, metaKey }) => {
-    socket.to(roomId).emit('agent:key', { key, ctrlKey, altKey, shiftKey, metaKey });
+    if (!isJoined(socket, 'controller', roomId)) return;
+    sendToAgent(roomId, 'agent:key', { key, ctrlKey, altKey, shiftKey, metaKey });
   });
 
   socket.on('disconnect', () => {
@@ -149,6 +172,21 @@ app.post('/api/room', (req, res) => {
   const roomId = randomUUID().slice(0, 8);
   getRoom(roomId);
   res.json({ roomId });
+});
+
+app.get('/api/agents', (req, res) => {
+  if (req.get('authorization') !== `Bearer ${ACCESS_TOKEN}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  const agents = [...rooms.entries()].map(([roomId, room]) => ({
+    roomId,
+    online: Boolean(room.agentSocketId),
+    device: room.device,
+    lastSeenAt: room.lastSeenAt
+  }));
+  agents.sort((a, b) => Number(b.online) - Number(a.online) || a.roomId.localeCompare(b.roomId));
+  res.json({ agents });
 });
 
 app.post('/api/wake', async (req, res) => {

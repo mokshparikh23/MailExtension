@@ -32,6 +32,7 @@ On a fresh Ubuntu 22.04/24.04 EC2 instance (Security Group inbound: 80, 443, and
 sudo mkdir -p /opt && sudo git clone <this-repo-url> /opt/internal-remote-control
 sudo DOMAIN=remote.yourdomain.com \
      ACCESS_TOKEN="$(openssl rand -hex 32)" \
+     AGENT_TOKEN="$(openssl rand -hex 32)" \
      EMAIL=you@yourdomain.com \
      bash /opt/internal-remote-control/deploy/deploy.sh
 ```
@@ -55,6 +56,7 @@ Nginx + certbot on the host (see `nginx-remote.conf`), then:
 cd /opt/internal-remote-control/deploy
 cat > .env <<EOF
 ACCESS_TOKEN=$(openssl rand -hex 32)
+AGENT_TOKEN=$(openssl rand -hex 32)
 CORS_ORIGIN=https://remote.yourdomain.com
 EOF
 docker compose up -d --build
@@ -74,18 +76,25 @@ curl https://remote.yourdomain.com/health      # {"ok":true,...}
 Point the agent (on the device being shared) at it:
 
 ```bash
-python agent.py --server https://remote.yourdomain.com --room test123 --token <ACCESS_TOKEN>
+python agent.py --server https://remote.yourdomain.com --room test123 --token <AGENT_TOKEN>
 ```
 
-Open `https://remote.yourdomain.com` in a browser, enter the token + room, Connect.
+Open `https://remote.yourdomain.com` in a browser, enter `ACCESS_TOKEN` + room,
+then Connect.
+
+For a multi-device GPO rollout, set a separate `AGENT_TOKEN` in `server/.env`
+(native deployment) or `deploy/.env` (Docker Compose), then restart the relay.
+Use `ACCESS_TOKEN` only in the browser controller. See [GPO deployment](gpo/README.md).
 
 ---
 
 ## Before real / public use — read this
 
-- **Shared static token only.** Anyone with the token + room can view and control
-  any connected agent. Fine behind VPN; for broader use add real per-session auth
-  and short-lived room codes.
+- **Static controller token.** Anyone with `ACCESS_TOKEN` and a room can view and
+  control that agent. Keep it with admins; for broader use add individual admin
+  accounts, audit logs, and per-device authorization.
+- **Shared agent token.** Any holder of `AGENT_TOKEN` can register an agent in any
+  room. Rotate it if exposed and use per-device enrollment for untrusted fleets.
 - Keep it behind **VPN / Tailscale / Zero Trust** for internal use — then you
   don't even need 80/443 open to the whole internet.
 - No rate limits or audit logging yet. Add both before exposing publicly.

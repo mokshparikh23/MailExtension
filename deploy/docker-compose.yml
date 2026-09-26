@@ -9,4 +9,5 @@ services:
     environment:
       - PORT=3000
       - ACCESS_TOKEN=${ACCESS_TOKEN:?set ACCESS_TOKEN in deploy/.env}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
       - CORS_ORIGIN=${CORS_ORIGIN:?set CORS_ORIGIN in deploy/.env}

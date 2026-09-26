@@ -113,6 +113,8 @@ own screen to click **Allow capture**.
 Windows 10 version 2004 or later is needed for `WDA_EXCLUDEFROMCAPTURE`. The
 result in a given capture tool may be a blank area or the window disappearing.
 
+For many domain-joined Windows laptops, see the [Group Policy deployment guide](deploy/gpo/README.md).
+
 ## Start the Windows Agent Automatically
 
 On Laptop B, stop any manually running agent, then open PowerShell in the

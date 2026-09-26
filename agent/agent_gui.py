@@ -1,4 +1,5 @@
 import base64
+import ctypes
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
+from ctypes import wintypes
 
 import socketio
 from mss import mss
@@ -18,7 +20,28 @@ from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Button, Controller as MouseController
 
 
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.3.0"
+_single_instance_handle = None
+
+
+def acquire_single_instance():
+    """Keep one visible GUI agent per Windows desktop session."""
+    global _single_instance_handle
+    if sys.platform != "win32":
+        return True
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.CreateMutexW(None, False, "Local\\AverisNetremAgent")
+    if not handle:
+        return False
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+    _single_instance_handle = handle
+    return True
 
 SPECIAL_KEYS = {
     "Backspace": Key.backspace,
@@ -301,6 +324,8 @@ class RemoteAgentApp:
 
 
 if __name__ == "__main__":
+    if not acquire_single_instance():
+        raise SystemExit("Netrem is already running in this Windows session.")
     auto_connect = "--autoconnect" in sys.argv
     config = {}
     if auto_connect:

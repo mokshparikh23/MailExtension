@@ -33,6 +33,22 @@ pip install -r requirements.txt
 python agent.py --server http://localhost:3000 --room test123 --token replace-with-a-long-random-token
 ```
 
+Or run the GUI agent:
+
+```bash
+cd agent
+source .venv/bin/activate
+python agent_gui.py
+```
+
+In the GUI, enter:
+
+- Server URL: `http://localhost:3000`
+- Room ID: `test123`
+- Access Token: `replace-with-a-long-random-token`
+
+Then click `Connect`. The browser controller should show the agent as online.
+
 In the browser controller:
 
 - Server token: `replace-with-a-long-random-token`

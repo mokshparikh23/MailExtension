@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Internal Remote Control</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div class="brand">
+          <div class="mark">IR</div>
+          <div>
+            <h1>Internal Remote Control</h1>
+            <p>Private room pairing for agency testing and support.</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="metric">
+            <span>Relay</span>
+            <strong>Socket.IO</strong>
+          </div>
+          <div id="status" class="status">Disconnected</div>
+        </div>
+      </section>
+
+      <section class="setup">
+        <label class="field">
+          <span>Server token</span>
+          <input id="token" type="password" autocomplete="off" placeholder="ACCESS_TOKEN" />
+        </label>
+        <label class="field compact">
+          <span>Room ID</span>
+          <input id="roomId" autocomplete="off" placeholder="a1b2c3d4" />
+        </label>
+        <button id="connectBtn" class="primary">Connect</button>
+      </section>
+
+      <section class="workspace">
+        <div class="screen-column">
+          <div class="screen-toolbar">
+            <div>
+              <span class="eyebrow">Remote display</span>
+              <strong>Paired Device Screen</strong>
+            </div>
+            <div class="screen-pills">
+              <span>JPEG</span>
+              <span>Room based</span>
+              <span>Manual consent</span>
+              <button id="fitBtn" class="ghost" type="button">Fill</button>
+              <button id="fullscreenBtn" class="ghost" type="button">Fullscreen</button>
+            </div>
+          </div>
+          <div class="screen-wrap">
+            <img id="screen" alt="Remote screen will appear after the agent connects" />
+            <div id="empty">
+              <div class="empty-icon">⌁</div>
+              <strong>Waiting for paired device agent</strong>
+              <span>Start the local agent with the same room ID, then request a screen.</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="panel-section">
+            <span class="eyebrow">Session</span>
+            <button id="screenBtn" class="primary wide">Get Screen</button>
+          </div>
+
+          <div class="panel-grid">
+            <label class="field">
+              <span>Refresh interval</span>
+              <input id="interval" type="number" value="1000" min="250" step="250" />
+            </label>
+            <label class="field">
+              <span>JPEG quality</span>
+              <input id="quality" type="number" value="45" min="10" max="90" />
+            </label>
+          </div>
+
+          <div class="panel-section">
+            <span class="eyebrow">Controls</span>
+            <label class="switch">
+              <input id="live" type="checkbox" />
+              <span></span>
+              <b>Live share</b>
+            </label>
+            <label class="switch">
+              <input id="mouse" type="checkbox" />
+              <span></span>
+              <b>Enable mouse</b>
+            </label>
+            <label class="switch">
+              <input id="keyboard" type="checkbox" />
+              <span></span>
+              <b>Enable keyboard</b>
+            </label>
+          </div>
+
+          <div class="panel-section grow">
+            <span class="eyebrow">Event log</span>
+            <pre id="log"></pre>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>

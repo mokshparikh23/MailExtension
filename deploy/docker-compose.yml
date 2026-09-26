@@ -1,0 +1,12 @@
+services:
+  relay:
+    build: ../server
+    image: internal-remote-control:latest
+    restart: always
+    # Bind to loopback only — Nginx (on the host) terminates TLS and proxies in.
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - PORT=3000
+      - ACCESS_TOKEN=${ACCESS_TOKEN:?set ACCESS_TOKEN in deploy/.env}
+      - CORS_ORIGIN=${CORS_ORIGIN:?set CORS_ORIGIN in deploy/.env}
